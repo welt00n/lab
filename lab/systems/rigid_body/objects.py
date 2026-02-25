@@ -132,6 +132,11 @@ class RigidBody:
 
         return [np.zeros(3)]
 
+    def min_rest_height(self):
+        """Minimum CM height when resting on the most stable face."""
+        pts = self._body_frame_extremes()
+        return min(abs(bp[1]) for bp in pts)
+
     def mesh(self):
         """Return (vertices, faces) in the world frame for visualisation."""
         body_verts, faces = self._body_mesh()

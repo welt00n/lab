@@ -66,7 +66,7 @@ class FloorConstraint:
             v_contact = body.velocity + np.cross(omega_world, lever)
             v_n = np.dot(v_contact, n)
 
-            if v_n < -1e-4:
+            if v_n < -0.01:
                 R = quat.to_rotation_matrix(body.orientation)
                 safe_I = np.where(body.inertia > 1e-30, body.inertia, 1e-30)
                 I_inv_body = np.diag(1.0 / safe_I)
@@ -115,8 +115,15 @@ class FloorConstraint:
                         body.angular_momentum += tau_fric_body
 
         if near_floor and self.rolling_resistance > 0:
-            body.angular_momentum *= (1.0 - self.rolling_resistance)
+            min_h = body.min_rest_height()
+            excess = max(0.0, body.position[1] - min_h)
+            stability = max(0.0, 1.0 - excess / 0.05)
 
-            if body.kinetic_energy() < 1e-3:
+            eff_rr = self.rolling_resistance * stability
+            if eff_rr > 0:
+                body.angular_momentum *= (1.0 - eff_rr)
+
+            at_rest_height = excess < 0.02
+            if body.kinetic_energy() < 0.005 and at_rest_height:
                 body.momentum[:] = 0.0
                 body.angular_momentum[:] = 0.0
