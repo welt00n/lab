@@ -39,6 +39,29 @@ def _frames(n, cap=500):
     return range(0, n, skip)
 
 
+def _convex_hull_2d(points):
+    """Graham scan convex hull for 2D points. Returns vertices in order."""
+    pts = points[np.lexsort((points[:, 1], points[:, 0]))]
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+
+    hull = lower[:-1] + upper[:-1]
+    return np.array(hull) if hull else points
+
+
 def _animate_pendulum(dataset, hint, interval, save_path):
     import matplotlib.pyplot as plt
     import matplotlib.animation as animation
@@ -319,7 +342,7 @@ def _animate_rigid_drop(dataset, hint, interval, save_path):
     """
     import matplotlib.pyplot as plt
     import matplotlib.animation as animation
-    from matplotlib.patches import Polygon, FancyBboxPatch
+    from matplotlib.patches import Polygon
     from lab.core import quaternion as quat
 
     pos_x = dataset.q[:, 0]
@@ -331,30 +354,38 @@ def _animate_rigid_drop(dataset, hint, interval, save_path):
     size = hint.get("size", 0.3)
 
     if shape == "cube":
-        half = size / 2
+        h = size / 2
         body_verts = np.array([
-            [-half, -half, 0], [half, -half, 0],
-            [half, half, 0], [-half, half, 0],
+            [sx * h, sy * h, sz * h]
+            for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)
         ])
     elif shape == "coin":
         r = size
         thick = 0.02
-        body_verts = np.array([
-            [-r, -thick / 2, 0], [r, -thick / 2, 0],
-            [r, thick / 2, 0], [-r, thick / 2, 0],
+        n_rim = 12
+        angles = np.linspace(0, 2 * np.pi, n_rim, endpoint=False)
+        body_verts = np.concatenate([
+            np.column_stack([r * np.cos(angles),
+                             np.full(n_rim, -thick / 2),
+                             r * np.sin(angles)]),
+            np.column_stack([r * np.cos(angles),
+                             np.full(n_rim, thick / 2),
+                             r * np.sin(angles)]),
         ])
     elif shape == "rod":
         half = size / 2
         rad = 0.02
         body_verts = np.array([
-            [-half, -rad, 0], [half, -rad, 0],
-            [half, rad, 0], [-half, rad, 0],
+            [-half, -rad, -rad], [-half, -rad, rad],
+            [-half, rad, -rad], [-half, rad, rad],
+            [half, -rad, -rad], [half, -rad, rad],
+            [half, rad, -rad], [half, rad, rad],
         ])
     else:
-        half = size / 2
+        h = size / 2
         body_verts = np.array([
-            [-half, -half, 0], [half, -half, 0],
-            [half, half, 0], [-half, half, 0],
+            [sx * h, sy * h, sz * h]
+            for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)
         ])
 
     max_y = max(np.max(pos_y), 0.5)
@@ -406,13 +437,18 @@ def _animate_rigid_drop(dataset, hint, interval, save_path):
     fig.tight_layout(pad=1.5)
 
     def _rotated_verts_2d(frame):
+        """Rotate all 3D body vertices and project onto x-y (side view).
+
+        Returns the convex hull so overlapping interior points are
+        discarded and the polygon renders as a proper silhouette.
+        """
         q = orientations[frame]
+        R = quat.to_rotation_matrix(q)
         cx, cy = pos_x[frame], pos_y[frame]
-        verts_2d = np.empty((len(body_verts), 2))
-        for i, bv in enumerate(body_verts):
-            r3d = quat.rotate_vector(q, bv)
-            verts_2d[i] = [cx + r3d[0], cy + r3d[1]]
-        return verts_2d
+
+        world = (R @ body_verts.T).T
+        pts = np.column_stack([world[:, 0] + cx, world[:, 1] + cy])
+        return _convex_hull_2d(pts)
 
     def update(frame):
         verts = _rotated_verts_2d(frame)

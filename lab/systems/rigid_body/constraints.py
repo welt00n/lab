@@ -54,62 +54,69 @@ class FloorConstraint:
     def _enforce_rigid(self, body):
         world_pt, lever = body.lowest_point()
         penetration = world_pt[1]
-        if penetration >= 0:
-            return
 
-        body.position[1] -= penetration
+        in_contact = penetration < 0
+        near_floor = penetration < 0.005
 
-        n = _UP
-        omega_world = quat.rotate_vector(body.orientation, body.omega)
-        v_contact = body.velocity + np.cross(omega_world, lever)
-        v_n = np.dot(v_contact, n)
+        if in_contact:
+            body.position[1] -= penetration
 
-        if v_n >= 0:
-            return
-
-        R = quat.to_rotation_matrix(body.orientation)
-        safe_I = np.where(body.inertia > 1e-30, body.inertia, 1e-30)
-        I_inv_body = np.diag(1.0 / safe_I)
-        I_inv_world = R @ I_inv_body @ R.T
-
-        r_cross_n = np.cross(lever, n)
-        rotational_term = np.dot(n, np.cross(I_inv_world @ r_cross_n, lever))
-        inv_mass_eff = 1.0 / body.mass + rotational_term
-
-        e_eff = self.restitution if abs(v_n) > 0.1 else 0.0
-        j_n = -(1.0 + e_eff) * v_n / inv_mass_eff
-
-        body.momentum += j_n * n
-        tau_impulse_world = np.cross(lever, j_n * n)
-        tau_impulse_body = quat.rotate_vector(
-            quat.conjugate(body.orientation), tau_impulse_world)
-        body.angular_momentum += tau_impulse_body
-
-        if self.friction > 0:
+            n = _UP
             omega_world = quat.rotate_vector(body.orientation, body.omega)
             v_contact = body.velocity + np.cross(omega_world, lever)
-            v_tangential = v_contact - np.dot(v_contact, n) * n
-            v_t_mag = np.linalg.norm(v_tangential)
+            v_n = np.dot(v_contact, n)
 
-            if v_t_mag > 1e-12:
-                t_hat = v_tangential / v_t_mag
+            if v_n < -1e-4:
+                R = quat.to_rotation_matrix(body.orientation)
+                safe_I = np.where(body.inertia > 1e-30, body.inertia, 1e-30)
+                I_inv_body = np.diag(1.0 / safe_I)
+                I_inv_world = R @ I_inv_body @ R.T
 
-                r_cross_t = np.cross(lever, t_hat)
-                rot_term_t = np.dot(
-                    t_hat, np.cross(I_inv_world @ r_cross_t, lever))
-                inv_mass_eff_t = 1.0 / body.mass + rot_term_t
-                if inv_mass_eff_t < 1e-30:
-                    inv_mass_eff_t = 1.0 / body.mass
+                r_cross_n = np.cross(lever, n)
+                rotational_term = np.dot(
+                    n, np.cross(I_inv_world @ r_cross_n, lever))
+                inv_mass_eff = 1.0 / body.mass + rotational_term
 
-                j_t_desired = v_t_mag / inv_mass_eff_t
-                j_t = min(j_t_desired, self.friction * abs(j_n))
+                e_eff = self.restitution if abs(v_n) > 0.1 else 0.0
+                j_n = -(1.0 + e_eff) * v_n / inv_mass_eff
 
-                impulse = -j_t * t_hat
-                body.momentum += impulse
-                tau_fric_world = np.cross(lever, impulse)
-                tau_fric_body = quat.rotate_vector(
-                    quat.conjugate(body.orientation), tau_fric_world)
-                body.angular_momentum += tau_fric_body
+                body.momentum += j_n * n
+                tau_impulse_world = np.cross(lever, j_n * n)
+                tau_impulse_body = quat.rotate_vector(
+                    quat.conjugate(body.orientation), tau_impulse_world)
+                body.angular_momentum += tau_impulse_body
 
-        if self.rolling_resistance > 0:
+                if self.friction > 0:
+                    omega_world = quat.rotate_vector(
+                        body.orientation, body.omega)
+                    v_contact = body.velocity + np.cross(omega_world, lever)
+                    v_tangential = v_contact - np.dot(v_contact, n) * n
+                    v_t_mag = np.linalg.norm(v_tangential)
+
+                    if v_t_mag > 1e-12:
+                        t_hat = v_tangential / v_t_mag
+
+                        r_cross_t = np.cross(lever, t_hat)
+                        rot_term_t = np.dot(
+                            t_hat,
+                            np.cross(I_inv_world @ r_cross_t, lever))
+                        inv_mass_eff_t = 1.0 / body.mass + rot_term_t
+                        if inv_mass_eff_t < 1e-30:
+                            inv_mass_eff_t = 1.0 / body.mass
+
+                        j_t_desired = v_t_mag / inv_mass_eff_t
+                        j_t = min(j_t_desired, self.friction * abs(j_n))
+
+                        impulse = -j_t * t_hat
+                        body.momentum += impulse
+                        tau_fric_world = np.cross(lever, impulse)
+                        tau_fric_body = quat.rotate_vector(
+                            quat.conjugate(body.orientation), tau_fric_world)
+                        body.angular_momentum += tau_fric_body
+
+        if near_floor and self.rolling_resistance > 0:
             body.angular_momentum *= (1.0 - self.rolling_resistance)
+
+            if body.kinetic_energy() < 1e-3:
+                body.momentum[:] = 0.0
+                body.angular_momentum[:] = 0.0
