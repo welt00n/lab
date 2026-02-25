@@ -6,6 +6,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.3.0] — 2026-02-23
+
+### Added
+- **Rigid-body drop experiments** — sweep height × tilt-angle for coin, cube,
+  and rod, classify the landing outcome (heads/tails/edge, cube face, rod end),
+  and plot a colour-coded outcome map.
+- `lab/experiments/drop_experiment.py` — core module with:
+  - `drop_body()` — single rigid-body drop simulation.
+  - `classify()` — dispatcher for coin, cube, and rod outcome classification.
+  - `sweep_drop()` — 2D parameter sweep with **CPU multiprocessing**
+    (`ProcessPoolExecutor`), configurable worker count, and per-result callback.
+  - `plot_drop_map()` — colour-coded image plot with per-shape palettes and
+    legend (cube uses paired colours for opposite faces).
+- Runner scripts `experiments/drop_coin.py`, `experiments/drop_cube.py`,
+  `experiments/drop_rod.py` with CLI arguments (`--nh`, `--na`, `--hmin`,
+  `--hmax`, `--axis`, `--workers`).
+- **Console progress** — all runner scripts print a header (grid size, height
+  range, axis, worker count) and periodic progress lines with elapsed time and
+  ETA.
+
+### Changed
+- Architecture docs updated with the new experiments layout and usage examples.
+
+---
+
 ## [0.2.0] — 2026-02-25
 
 ### Fixed

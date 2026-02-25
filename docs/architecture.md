@@ -47,11 +47,15 @@ physics/
 │   │   └── field_snapshot.py  FDTD field visualization and ray paths
 │   │
 │   └── experiments/           Experiment modules
-│       └── coin_toss.py       Coin toss: deterministic chaos demo
+│       ├── coin_toss.py       Coin toss: deterministic chaos demo
+│       └── drop_experiment.py Parallel rigid-body drop sweeps
 │
 ├── tests/                     106 unit and integration tests
-├── experiments/               Jupyter notebooks
-│   └── coin_toss.ipynb        Coin toss interactive experiment
+├── experiments/               Runnable experiment scripts
+│   ├── coin_toss.ipynb        Coin toss interactive notebook
+│   ├── drop_coin.py           Coin drop outcome map (height × tilt)
+│   ├── drop_cube.py           Cube drop outcome map (height × tilt)
+│   └── drop_rod.py            Rod drop outcome map (height × tilt)
 ├── docs/                      Documentation
 ├── main.py                    CLI demo launcher
 ├── completions.bash           Bash tab-completion for demos
@@ -154,6 +158,18 @@ python main.py drop [shape]  rigid body drop (cube/coin/rod)
 python main.py emwave        EM pulse through a dielectric
 python main.py rays          light rays through a lens
 ```
+
+## Experiments
+
+Standalone scripts in `experiments/` run larger parameter sweeps, using CPU multiprocessing for parallel execution:
+
+```
+python experiments/drop_coin.py              # coin: 40×60 grid, all CPUs
+python experiments/drop_cube.py --nh 60 --na 90   # cube: finer grid
+python experiments/drop_rod.py  --axis z --workers 4
+```
+
+Each prints real-time progress (percentage, elapsed time, ETA) and shows a color-coded outcome map at the end.
 
 ## Tests
 
