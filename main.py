@@ -96,10 +96,10 @@ def demo_drop(body_type="cube"):
 
     builders = {"cube": drop_cube, "coin": drop_coin, "rod": drop_rod}
     builder = builders.get(body_type, drop_cube)
-    orientation = quat.from_axis_angle([1, 1, 0], 0.3)
+    orientation = quat.from_axis_angle([1, 1, 0], 0.4)
 
-    exp = builder(height=3.0, restitution=0.7, dt=0.001, duration=5.0,
-                  orientation=orientation)
+    exp = builder(height=2.0, restitution=0.6, friction=0.5, dt=0.001,
+                  duration=4.0, orientation=orientation)
     data = exp.run(progress=True)
     print(f"{body_type} drop — final height: {data.q[-1, 1]:.3f} m")
     anim = animate(data)

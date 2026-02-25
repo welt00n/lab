@@ -307,20 +307,25 @@ def _animate_particle_2d(dataset, hint, interval, save_path):
 
 def _animate_rigid_drop(dataset, hint, interval, save_path):
     """
-    Side-view animation of a rigid body falling and bouncing.
+    Side-view animation of a rigid body falling, bouncing, and settling.
 
-    Draws a 2D cross-section in the x-y plane:
+    Left panel: x-y side view with floor and rotating body cross-section.
+    Right panel: height-vs-time trace.
+
+    Shapes:
       - cube:  rotating square outline
-      - coin:  rotating line segment (edge-on view)
-      - rod:   rotating line segment
+      - coin:  rotating rectangle (edge-on, showing thickness)
+      - rod:   rotating line segment with end-caps
     """
     import matplotlib.pyplot as plt
     import matplotlib.animation as animation
+    from matplotlib.patches import Polygon, FancyBboxPatch
     from lab.core import quaternion as quat
 
     pos_x = dataset.q[:, 0]
     pos_y = dataset.q[:, 1]
     orientations = dataset.q[:, 3:7]
+    t = dataset.t
 
     shape = hint.get("shape", "cube")
     size = hint.get("size", 0.3)
@@ -328,68 +333,99 @@ def _animate_rigid_drop(dataset, hint, interval, save_path):
     if shape == "cube":
         half = size / 2
         body_verts = np.array([
-            [-half, -half], [half, -half], [half, half], [-half, half]
+            [-half, -half, 0], [half, -half, 0],
+            [half, half, 0], [-half, half, 0],
         ])
     elif shape == "coin":
-        body_verts = np.array([[-size, 0], [size, 0]])
+        r = size
+        thick = 0.02
+        body_verts = np.array([
+            [-r, -thick / 2, 0], [r, -thick / 2, 0],
+            [r, thick / 2, 0], [-r, thick / 2, 0],
+        ])
     elif shape == "rod":
-        body_verts = np.array([[-size / 2, 0], [size / 2, 0]])
+        half = size / 2
+        rad = 0.02
+        body_verts = np.array([
+            [-half, -rad, 0], [half, -rad, 0],
+            [half, rad, 0], [-half, rad, 0],
+        ])
     else:
-        body_verts = np.array([[-size / 2, 0], [size / 2, 0]])
+        half = size / 2
+        body_verts = np.array([
+            [-half, -half, 0], [half, -half, 0],
+            [half, half, 0], [-half, half, 0],
+        ])
 
     max_y = max(np.max(pos_y), 0.5)
-    x_spread = max(np.max(np.abs(pos_x)), size) * 2
+    x_spread = max(np.max(np.abs(pos_x)) + size, size * 3)
 
-    fig, ax = plt.subplots(figsize=(6, 8))
-    ax.set_xlim(-x_spread, x_spread)
-    ax.set_ylim(-0.1, max_y * 1.15)
-    ax.set_aspect("equal")
-    ax.set_title(f"{shape} drop")
-    ax.set_xlabel("x")
-    ax.set_ylabel("height")
-    ax.axhline(0, color="saddlebrown", lw=2)
-    ax.fill_between([-x_spread, x_spread], -0.1, 0,
-                     color="saddlebrown", alpha=0.15)
-    ax.grid(True, alpha=0.3)
+    fig, (ax_scene, ax_trace) = plt.subplots(
+        1, 2, figsize=(11, 6),
+        gridspec_kw={"width_ratios": [1.3, 1]})
 
-    if shape == "cube":
-        from matplotlib.patches import Polygon
-        body_patch = Polygon(body_verts, closed=True, fill=False,
-                              ec="steelblue", lw=2)
-        ax.add_patch(body_patch)
-        artists = (body_patch,)
-    else:
-        body_line, = ax.plot([], [], "-o", color="steelblue",
-                             lw=3, markersize=4, solid_capstyle="round")
-        artists = (body_line,)
+    ax_scene.set_xlim(-x_spread, x_spread)
+    ax_scene.set_ylim(-0.15 * max_y, max_y * 1.15)
+    ax_scene.set_aspect("equal")
+    ax_scene.set_title(f"{shape} drop — side view", fontsize=12)
+    ax_scene.set_xlabel("x  (m)")
+    ax_scene.set_ylabel("height  (m)")
 
-    trail, = ax.plot([], [], "-", color="steelblue", alpha=0.15, lw=1)
-    trail_x, trail_y = [], []
+    floor_y = -0.15 * max_y
+    ax_scene.axhline(0, color="#8B4513", lw=2.5, zorder=2)
+    ax_scene.fill_between(
+        [-x_spread * 1.5, x_spread * 1.5], floor_y, 0,
+        color="#D2B48C", alpha=0.35, zorder=1)
+    for xg in np.linspace(-x_spread, x_spread, 15):
+        ax_scene.plot([xg, xg - 0.08 * max_y], [0, floor_y * 0.5],
+                      color="#8B4513", lw=0.5, alpha=0.3, zorder=1)
+    ax_scene.grid(True, alpha=0.15)
 
-    def _rotated_verts(frame):
-        """Project 3D rotation onto the x-y side view."""
+    body_patch = Polygon(
+        body_verts[:, :2], closed=True,
+        fc="steelblue", ec="midnightblue", lw=1.5, alpha=0.85, zorder=5)
+    ax_scene.add_patch(body_patch)
+    cm_dot, = ax_scene.plot([], [], "o", color="red", markersize=4, zorder=6)
+    time_text = ax_scene.text(
+        0.02, 0.96, "", transform=ax_scene.transAxes,
+        fontsize=10, verticalalignment="top",
+        fontfamily="monospace", color="0.3")
+
+    ax_trace.set_xlim(t[0], t[-1])
+    ax_trace.set_ylim(-0.05 * max_y, max_y * 1.05)
+    ax_trace.set_xlabel("time  (s)")
+    ax_trace.set_ylabel("height  (m)")
+    ax_trace.set_title("CM height", fontsize=11)
+    ax_trace.grid(True, alpha=0.2)
+    ax_trace.axhline(0, color="#8B4513", lw=1, alpha=0.4)
+    ax_trace.plot(t, pos_y, color="steelblue", alpha=0.2, lw=1)
+    trace_dot, = ax_trace.plot([], [], "o", color="steelblue", markersize=5)
+    trace_line, = ax_trace.plot([], [], "-", color="steelblue", lw=1.2, alpha=0.7)
+    trace_tx, trace_ty = [], []
+
+    fig.tight_layout(pad=1.5)
+
+    def _rotated_verts_2d(frame):
         q = orientations[frame]
         cx, cy = pos_x[frame], pos_y[frame]
-
-        verts_2d = np.zeros((len(body_verts), 2))
-        for i, (bx, by) in enumerate(body_verts):
-            v3d = np.array([bx, by, 0.0])
-            r3d = quat.rotate_vector(q, v3d)
+        verts_2d = np.empty((len(body_verts), 2))
+        for i, bv in enumerate(body_verts):
+            r3d = quat.rotate_vector(q, bv)
             verts_2d[i] = [cx + r3d[0], cy + r3d[1]]
         return verts_2d
 
     def update(frame):
-        verts = _rotated_verts(frame)
-        trail_x.append(pos_x[frame])
-        trail_y.append(pos_y[frame])
-        trail.set_data(trail_x, trail_y)
+        verts = _rotated_verts_2d(frame)
+        body_patch.set_xy(verts)
+        cm_dot.set_data([pos_x[frame]], [pos_y[frame]])
+        time_text.set_text(f"t = {t[frame]:.2f} s")
 
-        if shape == "cube":
-            body_patch.set_xy(verts)
-        else:
-            body_line.set_data(verts[:, 0], verts[:, 1])
+        trace_tx.append(t[frame])
+        trace_ty.append(pos_y[frame])
+        trace_line.set_data(trace_tx, trace_ty)
+        trace_dot.set_data([t[frame]], [pos_y[frame]])
 
-        return artists + (trail,)
+        return body_patch, cm_dot, time_text, trace_line, trace_dot
 
     frames = _frames(len(pos_x))
     anim = animation.FuncAnimation(fig, update, frames=frames,

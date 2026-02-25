@@ -103,7 +103,7 @@ class RigidBodyExperiment:
 
 
 def drop_cube(side=0.3, mass=1.0, height=2.0, g=9.81, restitution=0.8,
-              orientation=None, angular_momentum=None, **kw):
+              friction=0.6, orientation=None, angular_momentum=None, **kw):
     body = RigidBody.cube(
         mass=mass, side=side,
         position=np.array([0.0, height, 0.0]),
@@ -114,13 +114,13 @@ def drop_cube(side=0.3, mass=1.0, height=2.0, g=9.81, restitution=0.8,
     return RigidBodyExperiment(
         bodies=[body],
         fields=[GravityField(g)],
-        constraints=[FloorConstraint(restitution)],
+        constraints=[FloorConstraint(restitution, friction=friction)],
         **kw,
     )
 
 
 def drop_coin(radius=0.15, mass=1.0, height=2.0, g=9.81, restitution=0.8,
-              orientation=None, angular_momentum=None, **kw):
+              friction=0.6, orientation=None, angular_momentum=None, **kw):
     body = RigidBody.coin(
         mass=mass, radius=radius,
         position=np.array([0.0, height, 0.0]),
@@ -131,13 +131,13 @@ def drop_coin(radius=0.15, mass=1.0, height=2.0, g=9.81, restitution=0.8,
     return RigidBodyExperiment(
         bodies=[body],
         fields=[GravityField(g)],
-        constraints=[FloorConstraint(restitution)],
+        constraints=[FloorConstraint(restitution, friction=friction)],
         **kw,
     )
 
 
 def drop_rod(length=1.0, mass=1.0, height=2.0, g=9.81, restitution=0.8,
-             orientation=None, angular_momentum=None, **kw):
+             friction=0.6, orientation=None, angular_momentum=None, **kw):
     body = RigidBody.rod(
         mass=mass, length=length,
         position=np.array([0.0, height, 0.0]),
@@ -148,6 +148,6 @@ def drop_rod(length=1.0, mass=1.0, height=2.0, g=9.81, restitution=0.8,
     return RigidBodyExperiment(
         bodies=[body],
         fields=[GravityField(g)],
-        constraints=[FloorConstraint(restitution)],
+        constraints=[FloorConstraint(restitution, friction=friction)],
         **kw,
     )

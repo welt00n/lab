@@ -28,16 +28,18 @@ class Environment:
                 f"fields={len(self.fields)}, constraints={len(self.constraints)})")
 
 
-def earth_surface(restitution=0.8):
+def earth_surface(restitution=0.8, friction=0.6):
     return Environment("earth_surface",
                        fields=[GravityField(9.81)],
-                       constraints=[FloorConstraint(restitution=restitution)])
+                       constraints=[FloorConstraint(restitution=restitution,
+                                                    friction=friction)])
 
 def vacuum(g=9.81):
     return Environment("vacuum", fields=[GravityField(g)])
 
-def capacitor(E_strength=1000.0, restitution=0.8):
+def capacitor(E_strength=1000.0, restitution=0.8, friction=0.6):
     return Environment("capacitor",
                        fields=[GravityField(9.81),
                                UniformElectricField(np.array([0.0, E_strength, 0.0]))],
-                       constraints=[FloorConstraint(restitution=restitution)])
+                       constraints=[FloorConstraint(restitution=restitution,
+                                                    friction=friction)])

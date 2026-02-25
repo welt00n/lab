@@ -30,12 +30,14 @@ class TestTossCoin:
 
     def test_flat_heads_gives_heads_low_height(self):
         result = toss_coin(height=0.1, tilt_axis="x", tilt_angle=0.0,
-                           dt=0.001, restitution=0.5)
+                           dt=0.001, restitution=0.5,
+                           friction=0.0, rolling_resistance=0.0)
         assert result == HEADS
 
     def test_flat_tails_gives_tails_low_height(self):
         result = toss_coin(height=0.1, tilt_axis="x", tilt_angle=np.pi,
-                           dt=0.001, restitution=0.3)
+                           dt=0.001, restitution=0.3,
+                           friction=0.0, rolling_resistance=0.0)
         assert result == TAILS
 
     def test_trajectory_recording(self):

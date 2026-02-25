@@ -56,6 +56,7 @@ def classify_final_orientation(orientation):
 
 def toss_coin(height, tilt_axis="x", tilt_angle=0.0,
               radius=0.05, mass=0.01, restitution=0.5,
+              friction=0.6, rolling_resistance=0.05,
               g=9.81, dt=0.0005, duration=None,
               angular_momentum=None,
               record_trajectory=False):
@@ -78,6 +79,10 @@ def toss_coin(height, tilt_axis="x", tilt_angle=0.0,
         Coin mass.
     restitution : float
         Coefficient of restitution for floor bounces.
+    friction : float
+        Coulomb friction coefficient at the floor contact.
+    rolling_resistance : float
+        Fraction of angular momentum removed per contact event.
     g : float
         Gravitational acceleration.
     dt : float
@@ -117,7 +122,9 @@ def toss_coin(height, tilt_axis="x", tilt_angle=0.0,
     world = World()
     world.add_particle(body)
     world.add_field(GravityField(g))
-    world.add_constraint(FloorConstraint(restitution))
+    world.add_constraint(FloorConstraint(
+        restitution, friction=friction,
+        rolling_resistance=rolling_resistance))
 
     if duration is None:
         t_fall = np.sqrt(2 * height / g)
