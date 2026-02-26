@@ -6,6 +6,81 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.6.0] — 2026-02-23
+
+### Added
+- **Realistic physical parameters.** Coin modelled on a US quarter (24.26 mm
+  diameter, 1.75 mm thick, 5.67 g cupronickel). Cube modelled on a standard
+  16 mm casino die (8 g acrylic). Physics dimensions decoupled from visual
+  mesh — display meshes are ~12× larger for visibility, while all physics
+  calculations use real-world geometry.
+- **Mass-scaled thresholds.** All energy-based thresholds (settle KE, damping
+  zones, snap-to-zero) now scale with `ke_scale = m * g * char_size`, the PE
+  of lifting the object by its own size. Prevents threshold mismatches when
+  switching between large/small objects.
+- **PyVista 3D rendering.** Live dashboard and batch result viewer now use
+  PyVista (VTK/OpenGL) for GPU-accelerated 3D scenes showing all bodies
+  falling simultaneously. Falls back to matplotlib `Poly3DCollection` when
+  PyVista is not installed.
+  - `lab/visualization/pyvista_scene.py` — `DropScene` class managing N
+    actors on a floor plane with coordinate transform (physics y-up → display
+    z-up).
+  - All N bodies rendered (no 16-sample cap); floor plane auto-sized to fit.
+- **Wall-clock synchronised playback.** The "Play" button in the batch result
+  viewer advances simulation time in sync with real time via
+  `time.monotonic()`. Pause/resume and speed controls on both live and batch
+  viewers.
+- **New documentation**:
+  - `docs/README.md` — documentation index with cross-link diagram and entry
+    points by interest.
+  - `docs/contact_model.md` — full floor constraint deep dive (~450 lines):
+    penetration detection, normal impulse derivation, Coulomb friction, rolling
+    resistance, damping zones, settle detection, contact resolution flowchart,
+    code mapping across OOP/JIT/CUDA.
+  - `docs/realistic_parameters.md` — real-world constants, inertia tensor
+    derivations, scale invariance, dimensional analysis for thresholds,
+    timestep justification, visual vs physical mesh.
+  - `docs/drop_experiment.md` — experiment pipeline anatomy: parameter space,
+    three execution paths (CPU/GPU/live), classification, outcome map
+    interpretation, visualization architecture.
+
+### Changed
+- **Timestep halved** from `dt = 0.001` to `dt = 0.0005` for numerical
+  stability with realistic (small, light) objects. Worst-case angular velocity
+  after edge impact is ~2000 rad/s for a US quarter, requiring the smaller dt.
+- **Rod experiment removed.** Only coin and cube experiments remain.
+  `experiments/drop_rod.py` deleted; all rod references removed from docs.
+- **Documentation deep refactor** — all 9 existing docs updated:
+  - `physics.md` — expanded non-conservative systems section, fixed energy
+    equation, updated parameter tables to real values, added units convention,
+    extracted contact physics to `contact_model.md`.
+  - `integration.md` — recalculated half-kick residual for real mass/dt, added
+    Lie-group / symplecticity discussion for quaternion rotations, added
+    timestep selection guidance, added dimensionally-scaled settle threshold.
+  - `numerical_methods.md` — updated threshold table with `ke_scale` column,
+    fixed RK45 description (embedded pair, not two-half-step), added
+    dimensional analysis section, added quaternion drift analysis, updated
+    damping values and force-settle timeout.
+  - `rotations.md` — deepened SU(2) double-cover explanation, added quaternion
+    kinematics section (dq/dt = ½ω·q), added numerical drift and
+    renormalisation section.
+  - `architecture.md` — removed rod from project tree, added
+    three-implementations comparison (OOP/JIT/CUDA), added constants
+    synchronisation note, added live dashboard architecture section, updated
+    test count.
+  - `gpu.md` — updated settle thresholds to mass-scaled values, added
+    troubleshooting section (NvvmSupportError, compute capability, OOM),
+    added numerical reproducibility cross-ref, labeled hardware specs as
+    example, expanded performance section for halved dt.
+  - `parallelism.md` — condensed Flynn's taxonomy (~55→20 lines), added
+    load-balancing note, added JIT compilation overhead note, updated timing
+    claims for halved dt.
+  - `chaos.md` — updated dt reference, added double pendulum KE equation,
+    added numerical-vs-physical chaos section, added fractal basin dimension
+    discussion, added drop experiment connection note.
+
+---
+
 ## [0.5.0] — 2026-02-26
 
 ### Added
