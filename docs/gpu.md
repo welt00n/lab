@@ -220,8 +220,10 @@ graph LR
 
 ## 4. Memory model
 
-The GPU has its own memory (your RTX 3080 has 10 GB of GDDR6X). Data must
-be explicitly transferred between host (CPU) and device (GPU).
+The GPU has its own memory (the RTX 3080 used as our example has 10 GB of
+GDDR6X; any NVIDIA GPU with compute capability 3.5+ and sufficient memory
+will work). Data must be explicitly transferred between host (CPU) and
+device (GPU).
 
 ### Transfer workflow
 
@@ -295,13 +297,22 @@ discarded). This is called **thread divergence**, and it wastes cycles.
 Our simulation loop contains a settle-detection early exit:
 
 ```python
-if ke < 1e-6 and pos_y < settle_h:
+ke_thr = mass * g * settle_h * 1e-4
+if ke < ke_thr and pos_y < settle_h:
     settled_count += 1
-    if settled_count > 200:
+    if settled_count > 100:       # KE-based settle
         break
+elif settled_count > 5000:        # force-settle timeout
+    break
 else:
     settled_count = 0
 ```
+
+The threshold scales with `mass * g * char_size * 1e-4` — a dimensionless
+fraction of the potential energy of lifting the object by its own size
+(`settle_h` is the shape's characteristic size: `COIN_RADIUS = 0.01213` for
+the coin, `CUBE_HALF_SIDE = 0.008` for the cube). See
+[realistic_parameters.md](realistic_parameters.md) for the derivation.
 
 When one thread in a warp hits `break` but others are still simulating, the
 finished thread idles while the rest continue. This is divergence.
@@ -392,6 +403,13 @@ T_{\text{GPU}} \approx 0.5 \text{–} 2\;\text{s}
 $$
 
 The speedup is typically 100--500x for large grids.
+
+> **Timestep change in v0.6.0:** The timestep was halved from $dt = 0.001$
+> to $dt = 0.0005$ for numerical stability with realistic physical
+> parameters (see [realistic_parameters.md](realistic_parameters.md)). This
+> doubles the number of kernel iterations per simulation, increasing GPU
+> runtime by approximately 2×. The RTX 3080 timings reported here reflect
+> the updated timestep.
 
 ### Arithmetic intensity
 
@@ -491,6 +509,14 @@ This is an example of **write once, compile twice**: the same numerical
 recipe expressed in Numba's restricted Python subset can target both GPU
 and CPU with no algorithmic changes.
 
+> **Note on result parity:** Despite identical source-level math, the CPU
+> (`@njit`) and GPU (`@cuda.jit`) paths may produce different outcomes at
+> chaotic basin boundaries. This is expected — see the Troubleshooting
+> section on "CPU/GPU result divergence" below, and
+> [chaos.md](chaos.md) Section 8 for a deeper discussion of why
+> floating-point non-associativity causes physically meaningful differences
+> in chaotic systems.
+
 ---
 
 ## 9. Limitations
@@ -587,7 +613,8 @@ This runs at import time, before Numba attempts to load CUDA. If the
 python -c "from numba import cuda; print(cuda.gpus)"
 ```
 
-You should see your RTX 3080 listed. If you get an error about missing
+You should see your GPU listed (e.g. `<CUDA Device 0: NVIDIA GeForce RTX 3080>`).
+If you get an error about missing
 `libnvvm`, check that `_setup_cuda_env()` ran before any Numba import, or
 manually set the environment variables:
 
@@ -604,3 +631,39 @@ python experiments/drop_coin.py --gpu --nh 200 --na 360
 
 This launches `sweep_drop_gpu()` with a 200 x 360 grid. On an RTX 3080,
 expect completion in 1--2 seconds (vs. several minutes on CPU).
+
+---
+
+## Troubleshooting
+
+### NvvmSupportError
+
+```
+numba.cuda.cudadrv.error.NvvmSupportError: libNVVM cannot be found
+```
+
+This occurs when Numba cannot locate the CUDA toolkit's libNVVM library. The `_setup_cuda_env()` function in `drop_gpu.py` attempts to resolve this automatically by searching pip-installed packages for the CUDA libraries and adding them to `LD_LIBRARY_PATH`.
+
+If this fails:
+1. Check that `nvidia-cuda-nvcc-cu12` (or your CUDA version) is installed: `pip list | grep cuda`
+2. Verify the library exists: `find / -name 'libnvvm.so*' 2>/dev/null`
+3. Set the path manually: `export LD_LIBRARY_PATH=/path/to/cuda/nvvm/lib64:$LD_LIBRARY_PATH`
+
+### Compute capability mismatch
+
+If Numba reports an unsupported compute capability, check your GPU:
+
+```python
+from numba import cuda
+print(cuda.gpus[0].compute_capability)
+```
+
+Numba supports compute capability 3.5+ (Kepler and newer). The RTX 3080 is compute capability 8.6 (Ampere).
+
+### CUDA out of memory
+
+Each simulation thread uses registers and a small amount of stack. For very large grids (e.g., 1000×1000 = 1 million threads), the GPU may run out of memory. Reduce the grid size or use `threads_per_block=64` (the default is 128).
+
+### CPU/GPU result divergence
+
+Results from the CPU and GPU paths may differ at chaotic basin boundaries. This is not a bug — it is a consequence of floating-point non-associativity. The GPU executes operations in a different order (fused multiply-add, different reduction trees), producing slightly different rounding. In chaotic regions, this tiny difference is exponentially amplified. See [chaos.md](chaos.md) for the theoretical background.

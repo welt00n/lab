@@ -62,6 +62,31 @@ $$
 
 followed by normalisation to stay on the unit sphere.
 
+### Lie-group structure and symplecticity
+
+The orientation of a rigid body lives on $SO(3)$, the rotation group, which
+is a Lie group — not a vector space.  The quaternion representation maps
+$SO(3)$ to its double cover $SU(2) \cong S^3$ (the 3-sphere).  The
+exponential map $\vec{\omega}\,dt \to \exp(\vec{\omega}\,dt/2)$ is the
+Lie-group exponential; it maps the Lie algebra (angular velocities) to the
+group (rotations).
+
+The leapfrog scheme for rotations — half-kick $\vec{L}$, drift $\vec{e}$
+via exp-map, half-kick $\vec{L}$ — is symplectic on $T^*SO(3)$ in the same
+sense as the translational part: it is a composition of exact flows of split
+Hamiltonians.  The exp-map drift is the exact flow of the free-rotor
+Hamiltonian $H_{\text{rot}} = \vec{L}^T I^{-1} \vec{L} / 2$ for the
+half-stepped angular momentum.  The half-kicks are exact flows of the torque
+potential.
+
+This structure preservation holds despite the nonlinearity of the exp-map.
+The key is that the composition of shear maps on $T^*SO(3)$ preserves the
+canonical symplectic form, just as the translational shear maps preserve
+$d\vec{q} \wedge d\vec{p}$.  The quaternion normalisation after each step
+(dividing by $\|\vec{e}\|$) projects back onto $S^3$ without breaking the
+symplectic structure — it is the analogue of constraining a particle to a
+surface.
+
 Second angular half-kick:
 
 $$
@@ -140,6 +165,38 @@ sequenceDiagram
 
     Note over W: time += dt
 ```
+
+---
+
+## Timestep selection for rigid bodies
+
+The leapfrog stability criterion $\omega\,dt \le 2$ applies to the fastest
+angular frequency in the system.  For a free-falling rigid body striking a
+floor, the worst-case angular velocity comes from an edge impact:
+
+$$
+\omega_{\max} \approx \frac{4v}{r}
+$$
+
+where $v = \sqrt{2gh}$ is the impact velocity and $r$ is the body's
+characteristic radius (see [realistic_parameters.md](realistic_parameters.md)
+for the derivation).  For a US quarter ($r = 0.01213\;\text{m}$) dropped from
+$h = 2\;\text{m}$: $v \approx 6.3\;\text{m/s}$,
+$\omega_{\max} \approx 2064\;\text{rad/s}$.
+
+A useful heuristic: the rotation per step should not exceed ~30°
+(0.5 rad):
+
+| $dt$ (s) | $\omega\,dt$ (rad) | degrees/step | Verdict |
+|-----------|---------------------|--------------|---------|
+| 0.001    | 2.06               | 118°         | Unstable for edge impacts |
+| 0.0005   | 1.03               | 59°          | Marginal; adequate for most drops |
+| 0.00025  | 0.52               | 30°          | Safe for all drops |
+
+The framework defaults to $dt = 0.0005\;\text{s}$ as a compromise between
+accuracy and runtime.  Halving $dt$ doubles the number of integration steps
+(and runtime).  For parameter sweeps over thousands of drops, this cost is
+significant.
 
 ---
 
@@ -243,6 +300,9 @@ For a simulation running $10^6$ steps:
 This is why every molecular-dynamics code, every orbital-mechanics
 integrator, and our own `lab/core/integrators.py` defaults to
 symplectic methods for Hamiltonian systems.
+
+For the full derivation and implications of the modified Hamiltonian
+theorem, see [numerical_methods.md](numerical_methods.md) Section 5.3.
 
 ## Stability analysis
 
@@ -412,13 +472,13 @@ Consider a rigid body that has come to rest on the floor.  The leapfrog
 step proceeds as:
 
 1. **First half-kick**: $p_y \leftarrow p_y - mg \cdot dt/2$.  The body
-   acquires downward momentum $\Delta p = -mg \cdot dt/2 \approx -0.0049$.
+   acquires downward momentum $\Delta p = -mg \cdot dt/2 \approx -1.39 \times 10^{-5}\;\text{kg\!\cdot\!m/s}$.
 2. **Drift**: the body moves downward, penetrating the floor.
 3. **Floor constraint**: detects penetration, lifts the body, applies an
    impulse.  If the energy is low enough, the constraint zeros all
    momenta ($p = 0$, $L = 0$).
 4. **Second half-kick**: $p_y \leftarrow p_y - mg \cdot dt/2$.  The body
-   again acquires $\Delta p \approx -0.0049$.
+   again acquires $\Delta p \approx -1.39 \times 10^{-5}\;\text{kg\!\cdot\!m/s}$.
 
 After step 4, the momentum is **never zero** — even though the floor
 constraint just zeroed it.  The residual kinetic energy is
@@ -426,10 +486,11 @@ constraint just zeroed it.  The residual kinetic energy is
 $$
 KE_{\text{residual}} = \frac{(mg \cdot dt/2)^2}{2m}
 = \frac{m g^2 dt^2}{8}
-\approx 1.2 \times 10^{-5}\;\text{J}
+\approx 1.71 \times 10^{-8}\;\text{J}
 $$
 
-for $m = 1\;\text{kg}$, $g = 9.81\;\text{m/s}^2$, $dt = 0.001\;\text{s}$.
+for $m = 0.00567\;\text{kg}$ (US quarter coin), $g = 9.81\;\text{m/s}^2$,
+$dt = 0.0005\;\text{s}$.
 This is a pure artefact of the operator splitting — the body is physically
 at rest, but the integrator's half-kick injects a small momentum quantum
 every step that the constraint then removes, only for the second half-kick
@@ -439,8 +500,30 @@ to reinject it.
 
 The settle condition checks $KE < \epsilon$ for some threshold $\epsilon$.
 If $\epsilon < KE_{\text{residual}}$, the body **never** settles, even
-though it is visually at rest.  With $\epsilon = 10^{-6}$ and
-$KE_{\text{residual}} = 1.2 \times 10^{-5}$, the condition always fails.
+though it is visually at rest.
+
+### Dimensionally-scaled settle threshold
+
+A fixed threshold does not generalise across different masses and geometries.
+Instead, scale the threshold to the body's gravitational potential energy at
+its own characteristic height:
+
+$$
+\text{ke\_thr} = m \cdot g \cdot \text{settle\_h} \times 10^{-4}
+$$
+
+where $\text{settle\_h}$ is the shape's characteristic size (e.g. its radius).
+For a coin ($\text{settle\_h} \approx \text{COIN\_RADIUS} = 0.01213\;\text{m}$):
+
+$$
+\text{ke\_thr} = 0.00567 \times 9.81 \times 0.01213 \times 10^{-4}
+\approx 6.7 \times 10^{-8}\;\text{J}
+$$
+
+This is comfortably above the half-kick residual $1.7 \times 10^{-8}\;\text{J}$,
+so the settle condition triggers reliably once the body is physically at rest.
+See [realistic_parameters.md](realistic_parameters.md) for the derivation of
+COIN_RADIUS, mass, and other physical constants used here.
 
 ### The fix: check between constraint and second half-kick
 

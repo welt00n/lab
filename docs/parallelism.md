@@ -40,9 +40,9 @@ graph LR
 
 Our parameter sweep in `lab/experiments/drop_experiment.py` runs thousands of independent
 rigid-body simulations. On a single core at 4 GHz, a 40x60 grid takes minutes. Spread
-across 8 CPU cores it takes roughly one-eighth the time. On a GPU with thousands of
-threads it finishes in under a second. The physics is identical — only the mapping onto
-hardware changes.
+across 8 CPU cores it completes in roughly one-eighth the time. On a GPU with thousands
+of threads it finishes orders of magnitude faster. The physics is identical — only the
+mapping onto hardware changes.
 
 
 ## Processes vs threads
@@ -107,6 +107,14 @@ flowchart TD
 The `_worker` function is defined at module level (not as a nested function or lambda)
 because Python's `pickle` module can only serialise top-level functions. This is a common
 pattern when using `ProcessPoolExecutor`.
+
+### Load balancing
+
+`ProcessPoolExecutor.map` distributes tasks to workers in chunks. When used with
+`concurrent.futures.as_completed`, results are returned as they finish — fast-settling
+drops (low heights, flat angles) complete first and free their workers for slower ones
+(high heights, near-edge angles). This implicit load balancing is effective because the
+per-simulation runtime varies by an order of magnitude across the parameter grid.
 
 
 ## Embarrassingly parallel problems
@@ -270,36 +278,14 @@ and data streams they process simultaneously.
 | **MIMD** | Multiple | Multiple | Multicore CPU, cluster |
 | **MISD** | Multiple | 1 | Rare (some fault-tolerant systems) |
 
-Modern hardware blurs these boundaries. A multicore CPU is MIMD at the core level but
-each core contains SIMD vector units (SSE, AVX). The interesting addition for scientific
-computing is **SIMT** — Single Instruction, Multiple Threads — the GPU execution model.
+Our GPU kernels use **SIMT** (Single Instruction, Multiple Threads) — NVIDIA's variant
+of SIMD where each thread has its own registers and can diverge at branches (at a
+performance cost). A **warp** of 32 threads executes the same instruction simultaneously;
+if threads diverge on a branch, both paths execute serially with inactive threads masked
+(**warp divergence**).
 
-### SIMT and GPU warps
-
-A GPU groups threads into **warps** (NVIDIA terminology) of 32 threads. All 32 threads
-in a warp execute the *same* instruction at the *same* time, each operating on different
-data. This is conceptually similar to SIMD, but with a key difference: threads can
-diverge on branches. If some threads in a warp take the `if` path and others take the
-`else` path, the warp executes *both* paths serially, masking inactive threads. This is
-called **warp divergence** and it reduces throughput.
-
-```mermaid
-flowchart LR
-    subgraph "Warp (32 threads)"
-        direction TB
-        T0["Thread 0\ndata[0]"]
-        T1["Thread 1\ndata[1]"]
-        T2["..."]
-        T31["Thread 31\ndata[31]"]
-    end
-    INST["Single instruction\n(e.g., multiply)"] --> T0
-    INST --> T1
-    INST --> T2
-    INST --> T31
-```
-
-Our parameter sweep maps beautifully to SIMT. In `lab/experiments/drop_gpu.py`, the
-CUDA kernel `drop_kernel` assigns one thread per $(h_i, \theta_j)$ pair:
+Our parameter sweep maps naturally to SIMT. In `lab/experiments/drop_gpu.py`, one thread
+per $(h_i, \theta_j)$ pair runs identical simulation logic, so warp divergence is minimal:
 
 ```python
 @cuda.jit
@@ -309,12 +295,6 @@ def drop_kernel(heights, angles, ...):
         return
     # ... run full simulation for this (height, angle) pair ...
 ```
-
-Every thread executes the same simulation logic (same timestep loop, same collision
-detection, same classification). The only variation is the input parameters. This means
-minimal warp divergence: all 32 threads in a warp follow nearly identical control flow,
-differing only in which height and angle they process. The GPU's thousands of threads
-achieve massive throughput on this uniform workload.
 
 
 ## Memory hierarchy
@@ -411,14 +391,14 @@ Consider a 40x60 coin-drop sweep (2400 simulations):
 
 | Metric | CPU (8 cores) | GPU (RTX 3080) |
 |---|---|---|
-| Wall-clock time | ~15 s | ~0.3 s |
+| Wall-clock time | ~30 s | ~0.6 s |
 | Speedup vs 1 core | ~7.9x | ~400x |
-| Simulations/sec | ~160 | ~8000 |
-| Energy per sim | ~50 mJ | ~0.1 mJ |
+| Simulations/sec | ~80 | ~4000 |
+| Energy per sim | ~100 mJ | ~0.2 mJ |
 
 The GPU advantage grows with grid size because its parallelism scales to fill thousands
 of threads, while the CPU is limited by its core count. At 200x300 (60,000 cells), the
-GPU finishes in ~2 s while the CPU requires ~6 minutes.
+GPU finishes in ~4 s while the CPU requires ~12 minutes.
 
 ### Architecture decision in this codebase
 
@@ -489,8 +469,8 @@ scatter plot, and return.  The animation framework handles the GUI event loop.
 └─────────────────────────────────────────────┘
 ```
 
-This works because the JIT-compiled physics is fast enough (~8 ms for 2400
-bodies × 10 steps) to fit inside a 30 ms animation frame.  There is no queue,
+This works because the JIT-compiled physics is fast enough (~16 ms for 2400
+bodies × 20 steps) to fit inside a 30 ms animation frame.  There is no queue,
 no lock, no race condition.  If the physics takes longer than the frame
 interval, the animation simply slows down — it never deadlocks.
 
@@ -511,18 +491,32 @@ pipeline that is theoretically faster but practically fragile.
 
 The single-thread approach only works because `numba @njit` compiles the
 physics loop to machine code, achieving ~300× speedup over pure Python.
-Without JIT, 2400 Python-level `World.step()` calls would take ~2400 ms per
+Without JIT, 2400 Python-level `World.step()` calls would take ~4800 ms per
 frame — far too slow for interactive use.  JIT compilation collapses the
 choice between "fast but complex (threading)" and "simple but slow (single
 thread)" into "simple *and* fast."
 
-| Implementation | 2400 bodies × 10 steps | Frame rate |
+| Implementation | 2400 bodies × 20 steps | Frame rate |
 |---|---|---|
-| Python `World` objects | ~2400 ms | < 1 fps |
-| `@njit` compiled | ~8 ms | ~30 fps (physics-limited) |
-| Threaded Python `World` | ~2400 ms + queue overhead | < 1 fps + deadlock risk |
+| Python `World` objects | ~4800 ms | < 1 fps |
+| `@njit` compiled | ~16 ms | ~30 fps (physics-limited) |
+| Threaded Python `World` | ~4800 ms + queue overhead | < 1 fps + deadlock risk |
 
 The lesson: **optimise the bottleneck before reaching for concurrency**.
+
+### JIT compilation overhead
+
+The first call to any `@njit(cache=True)` function triggers Numba's ahead-of-time
+compilation, which takes 30–120 seconds depending on function complexity and CPU speed.
+The compiled binary is cached to disk in `__pycache__`. Subsequent runs in the same
+environment start instantly.
+
+If you modify a JIT-compiled function, Numba detects the change via hash comparison and
+recompiles automatically. To force recompilation (e.g., after changing a captured global
+constant), delete the `__pycache__` directory.
+
+The `cache=True` flag is critical for interactive use: without it, every Python process
+invocation recompiles from scratch.
 
 
 ## Further reading

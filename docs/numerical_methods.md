@@ -85,13 +85,19 @@ The same threshold appears in `from_axis_angle` and `exp_map`.
 **Contact detection** (`lab/systems/rigid_body/constraints.py`). The floor
 constraint uses several small thresholds:
 
-| Threshold | Purpose |
-|-----------|---------|
-| `penetration < 0` | Body below floor? |
-| `penetration < 0.005` | Near floor (rolling resistance)? |
-| `abs(v_n) > 0.1` | Impact velocity large enough for restitution? |
-| `v_t_mag > 1e-12` | Meaningful tangential sliding? |
-| `kinetic_energy < 0.005` | Body at rest? |
+| Threshold | Value | Purpose |
+|-----------|-------|---------|
+| `penetration < 0` | 0 m | Body below floor? |
+| `excess < 2 * char_size` | ~0.024 m (coin), ~0.016 m (cube) | Near-floor damping zone |
+| `abs(v_n) > 0.1` | 0.1 m/s | Impact velocity large enough for restitution? |
+| `v_t_mag > 1e-12` | 1e-12 m/s | Meaningful tangential sliding? |
+| `ke < 0.01 * ke_scale` | ~6.7e-7 J (coin) | Hard zero-momentum snap |
+| `ke < 0.5 * ke_scale` | ~3.4e-5 J (coin) | Multiplicative damping zone |
+| `ke_thr = m*g*L*1e-4` | ~6.7e-8 J (coin) | Settle detection threshold |
+
+Where ke_scale = m * g * char_size (see realistic_parameters.md).
+
+All KE thresholds scale with `ke_scale = m * g * L` — the potential energy of lifting the object by its own characteristic size. See [realistic_parameters.md](realistic_parameters.md) for derivations.
 
 Each is set just above the level where floating-point noise would produce
 spurious behavior (ghost impulses, jittering contacts, perpetual micro-bouncing).
@@ -275,9 +281,7 @@ y_{\text{extrap}} = \frac{2^p \, y_{h/2} - y_h}{2^p - 1}
 $$
 
 This eliminates the leading error term, yielding $\mathcal{O}(h^{p+1})$
-accuracy. The `rk45_adaptive` integrator uses a variant: it compares the
-RK4 result against a two-half-step result to estimate local error and adapt
-the step size.
+accuracy. The `rk45_adaptive` integrator uses the Dormand-Prince embedded pair described in Section 7 of `integration.md`: the 4th-order and 5th-order estimates share six function evaluations, and their difference provides the local error estimate at no additional cost.
 
 ### 3.5 Order is not everything
 
@@ -506,6 +510,16 @@ $$
   structure (Lyapunov exponents, KAM tori) but individual trajectories diverge
   exponentially regardless.
 
+### 5.8 Quaternion normalisation drift
+
+The unit quaternion constraint $\|q\| = 1$ is not exactly preserved by floating-point quaternion multiplication. Each multiplication introduces a relative error of order $\epsilon_{\text{mach}}$, so after $N$ steps:
+
+$$\|q_N\| \approx 1 + N \cdot O(\epsilon_{\text{mach}})$$
+
+For $N = 10^6$ steps, the drift is $\sim 10^{-10}$ — small but growing linearly. Without correction, the quaternion would drift off the unit sphere, causing the rotation matrix to become non-orthogonal and the contact-detection algorithm to produce incorrect results.
+
+The codebase renormalises $q$ after every integration step. The cost is one norm computation and four divisions — negligible compared to force evaluation. This is analogous to projecting a constrained particle back onto its constraint surface after each step.
+
 ---
 
 ## Summary: Choosing Parameters for a New Experiment
@@ -555,6 +569,28 @@ The thresholds interact with the integrator's operator-splitting artefact
 | `settle_h` (height ceiling) | Maximum $y$-position for settle candidacy | Shape-dependent | Prevents detecting "settled" while still in free fall |
 | `near_floor` (damping zone) | Penetration depth below which damping activates | 0.05 m | Must be wide enough to catch micro-bouncing bodies |
 
+### 6.2.1 Why thresholds must scale with physical parameters
+
+When the simulation uses realistic object dimensions (a 12 mm coin rather than a 0.15 m coin), all energy-based thresholds must be rescaled. A fixed threshold like $\epsilon = 10^{-6}$ J that works for a 1 kg, 0.3 m object will be orders of magnitude too large for a 5.67 g, 12 mm object.
+
+The natural energy unit for contact physics is:
+
+$$E_0 = m \, g \, L$$
+
+where $L$ is the object's characteristic size (radius for a coin, half-side for a cube). This is the potential energy of lifting the object by one body-length — the minimal energy scale at which contact dynamics are physically meaningful.
+
+For the US quarter: $E_0 = 0.00567 \times 9.81 \times 0.01213 \approx 6.7 \times 10^{-4}$ J.
+
+All thresholds in the codebase are defined as fractions of $E_0$:
+
+| Threshold | Fraction of $E_0$ | Rationale |
+|-----------|-------------------|-----------|
+| Settle KE | $10^{-4} \cdot m g h_{\text{settle}}$ | 0.01% of PE at settle height |
+| Snap-to-zero KE | $0.01 \cdot E_0$ | 1% of one-body-length PE |
+| Multiplicative damp zone | $0.5 \cdot E_0$ | 50% of one-body-length PE |
+
+This dimensional scaling ensures that the settle detection works correctly regardless of the object's mass and size. See [realistic_parameters.md](realistic_parameters.md) for the full threshold table.
+
 ### 6.3 Damping near the floor
 
 Without explicit damping, a body in contact with the floor can oscillate
@@ -590,11 +626,11 @@ $$
 This is not a Coulomb friction model — it is a phenomenological damping
 designed to produce convergence in finite time.
 
-**3. Linear velocity damping.** A bulk $0.2\%$ per-step reduction in all
+**3. Linear velocity damping.** A bulk $1\%$ per-step reduction in all
 momentum components when the body is in the near-floor zone:
 
 $$
-\vec{p} \leftarrow 0.998 \, \vec{p}
+\vec{p} \leftarrow 0.99 \, \vec{p}
 $$
 
 This handles the case where a body slides horizontally across the floor
@@ -610,7 +646,7 @@ $$
 $$
 
 This guarantees finite-time convergence.  Without it, the multiplicative
-damping only approaches zero asymptotically ($0.998^n \to 0$ but never
+damping only approaches zero asymptotically ($0.99^n \to 0$ but never
 reaches it).
 
 ### 6.4 Force-settle timeout
@@ -622,8 +658,9 @@ damping only applies inside the zone, so the rocking never fully converges.
 
 A pragmatic solution: if a body has spent more than 5000 cumulative
 timesteps below `settle_h` (regardless of KE), declare it settled.  At
-$dt = 0.001$, this is 5 s of simulated time near the floor — physically,
-any residual motion at that point is below any measurable threshold.
+$dt = 0.0005$, 5000 steps correspond to 2.5 s of simulated time near the
+floor — physically, any residual motion at that point is below any
+measurable threshold.
 
 This is implemented in `live_dashboard.py::_step_all` as a secondary
 branch of the settle-detection logic.

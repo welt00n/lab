@@ -94,9 +94,25 @@ The state $(q, p)$ evolves as a flow in phase space. Liouville's theorem says th
 
 For 1-DOF systems, you can visualize the entire dynamics as contour lines of $H$ in the $(q, p)$ plane. Each contour is a possible trajectory. The topology of these contours reveals everything: stable equilibria (elliptic fixed points), unstable equilibria (hyperbolic fixed points), separatrices (boundaries between qualitatively different motions), and chaos (when contours dissolve into a tangle for systems with 2+ DOF).
 
+## Units convention
+
+All quantities in this framework are in **SI units**: metres, kilograms, seconds, radians. Energies are in joules, momenta in kg·m/s, angular momenta in kg·m²/s. See [realistic_parameters.md](realistic_parameters.md) for the specific object constants (US quarter, 16 mm die) and their derivations.
+
 ## Non-conservative systems
 
-Damping, driving forces, and friction break energy conservation. The framework handles these by modifying the gradients $\partial H/\partial q$ to include non-conservative terms. The integrator still works — it just won't conserve energy (which is physically correct). You'll see the energy plot drift or oscillate, telling you about energy dissipation or injection.
+Damping, driving forces, and friction break energy conservation. Hamiltonian mechanics handles this cleanly: the equations of motion acquire additional terms that cannot be derived from $H$ alone.
+
+**Drag forces** modify the momentum equation directly. The `DragField` in `lab/systems/rigid_body/fields.py` adds a velocity-dependent force:
+
+$$
+\dot{\vec{p}} = -\frac{\partial H}{\partial \vec{q}} - b\,\frac{\vec{p}}{m}
+$$
+
+where $b$ is the drag coefficient. The extra term is *not* a gradient of any scalar — it has no potential — so it breaks the symplectic structure. Energy decreases monotonically.
+
+**Contact constraints** are non-smooth: the floor exerts zero force when the body is airborne and an impulsive force at contact. The `FloorConstraint` in `lab/systems/rigid_body/constraints.py` applies impulse-based corrections (restitution, friction, rolling resistance) that dissipate energy in discrete events rather than continuously. See [contact_model.md](contact_model.md) for a full derivation.
+
+The integrator still works in both cases — it applies the conservative (Hamiltonian) part symplectically and the dissipative part as an operator-splitting correction. Energy is no longer conserved, which is physically correct. The energy trace from `lab/analysis/energy.py` becomes a diagnostic: monotonic decrease means pure dissipation; stepwise drops indicate individual contact events.
 
 ## Electromagnetic waves (FDTD)
 
@@ -504,15 +520,25 @@ damping — the body can spin freely).
 
 This is a **phenomenological** model, not derived from first principles.
 It is designed to produce convergence in finite time while preserving
-the qualitative dynamics (which face the body lands on, which end of
-the rod is down).
+the qualitative dynamics (which face the body lands on).
+
+For the complete derivation of all contact mechanisms — including dimensional
+analysis of thresholds, the snap-to-zero logic, settle detection, and the
+code mapping across all three implementations — see
+[contact_model.md](contact_model.md).
 
 ### Energy flow in a contact event
 
 A single bounce illustrates the energy budget:
 
 $$
-KE_{\text{before}} = KE_{\text{after}} \cdot \frac{1}{(1 + e)^2} + \Delta E_{\text{friction}} + \Delta E_{\text{rolling}}
+KE_{\text{after,normal}} = e^2 \, KE_{\text{before,normal}}
+$$
+
+The total energy budget for a single bounce is therefore:
+
+$$
+KE_{\text{before}} = KE_{\text{after}} + (1 - e^2)\,KE_{\text{before,normal}} + \Delta E_{\text{friction}} + \Delta E_{\text{rolling}}
 $$
 
 At low speeds ($e_{\text{eff}} = 0$), the normal impulse absorbs all
@@ -525,14 +551,15 @@ condition for the settle-detection logic described in
 
 Different shapes have different stable resting configurations:
 
-| Shape | Resting states | Classification |
-|---|---|---|
-| Coin ($r = 0.15$ m, $h = 0.01$ m) | Flat on either face, or balanced on edge (unstable) | heads (+1), tails (-1), edge (0) |
-| Cube ($s = 0.3$ m) | Flat on any of 6 faces | face index 0–5 |
-| Rod ($L = 1.0$ m, $r = 0.02$ m) | Lying flat, either end down (unstable) | horizontal (0), +x-end down (+1), −x-end down (−1) |
+| Shape | Dimensions | Resting states | Classification |
+|---|---|---|---|
+| Coin (US quarter) | $r = 0.01213$ m, $h_t = 0.000875$ m, $m = 0.00567$ kg | Flat on either face, or balanced on edge (unstable) | heads (+1), tails (-1), edge (0) |
+| Cube (16 mm die) | $s = 0.016$ m, $m = 0.008$ kg | Flat on any of 6 faces | face index 0–5 |
 
-The lowest point that touches the floor determines the outcome.  For
-the coin and cube, this is straightforward — rotate the body's extreme
-points into the world frame and find the one with minimum $y$.  For the
-rod, the classification checks which end of the rod's long axis is
-pointing downward.
+The lowest point that touches the floor determines the outcome.
+For both shapes, the algorithm rotates the body's extreme points
+(rim samples for the coin, vertices for the cube) into the world
+frame via the quaternion and finds the one with minimum $y$.
+See [contact_model.md](contact_model.md) for the full penetration-detection
+algorithm and [realistic_parameters.md](realistic_parameters.md) for the
+physical constants and their sources.

@@ -163,9 +163,13 @@ $$
 V = -(m_1 + m_2)\,g\,l_1\cos\theta_1 \;-\; m_2\,g\,l_2\cos\theta_2
 $$
 
-and the kinetic energy has the complicated coupling term visible in the source:
-it depends on $\cos(\theta_1 - \theta_2)$, which mixes the two degrees of
-freedom nonlinearly.
+and the kinetic energy has the complicated coupling term described below.
+
+The kinetic energy of the double pendulum is:
+
+$$T = \frac{1}{2}(m_1 + m_2)\,l_1^2\,\dot{\theta}_1^2 + \frac{1}{2}m_2\,l_2^2\,\dot{\theta}_2^2 + m_2\,l_1\,l_2\,\dot{\theta}_1\,\dot{\theta}_2\,\cos(\theta_1 - \theta_2)$$
+
+The coupling term $m_2 l_1 l_2 \dot{\theta}_1 \dot{\theta}_2 \cos(\theta_1 - \theta_2)$ is what makes the system non-integrable: the two angles interact through both the kinetic energy (velocity coupling) and the potential energy (each pendulum's weight depends on the other's angle through the geometric constraint). This coupling is the origin of chaos.
 
 ### Why two degrees of freedom matter
 
@@ -369,7 +373,7 @@ results_gpu = sweep_drop_gpu("coin", heights, angles, tilt_axis="x")
 
 Both implementations solve the same equations: rigid-body dynamics with gravity,
 floor collisions, Coulomb friction, and rolling resistance.  The integrator
-is the same leapfrog (symplectic) scheme with the same time step `dt=0.001`.
+is the same leapfrog (symplectic) scheme with the same time step `dt = 0.0005`.
 The physical parameters are identical.
 
 And yet, at high drop heights, the two result matrices **disagree** on a
@@ -425,6 +429,28 @@ Subtracting the two outcome maps produces a "disagreement mask" that is nearly
 empty at low heights and dense at high heights.  The mask traces out the
 fractal basin boundaries --- an empirical map of where chaos lives in
 parameter space.
+
+---
+
+## Numerical chaos vs physical chaos
+
+A critical distinction in computational physics: when two initially close trajectories diverge, is this **physical sensitivity** (genuine chaos) or a **numerical artefact** (integrator error)?
+
+### The diagnostic
+
+Run the same simulation at two different timesteps, $dt$ and $dt/2$. If the divergence rate is the same in both cases, it is physical. If the divergence rate changes significantly (especially decreases with smaller $dt$), it is numerical.
+
+More precisely: compute the Lyapunov exponent $\lambda$ at both timesteps. Physical chaos gives the same $\lambda$ (within statistical error). Numerical chaos gives $\lambda$ that decreases toward zero as $dt \to 0$.
+
+### The half-kick artefact as an example
+
+The leapfrog integrator's operator splitting introduces a residual momentum of order $mg \cdot dt/2$ at every step (see [integration.md](integration.md)). For a body that is physically at rest on the floor, this residual acts as a tiny periodic perturbation. If the settle-detection threshold is poorly chosen, the body may appear to exhibit chaotic micro-bouncing — but this is an artefact of the integrator, not the physics.
+
+The fix (checking KE between the floor constraint and the second half-kick) eliminates this artefact. The physical chaos of the coin toss — sensitivity of the final outcome to the initial drop height and angle — is robust across timesteps and can be verified by the Richardson extrapolation diagnostic.
+
+### Floating-point non-associativity
+
+Even with identical timesteps, the CPU and GPU implementations produce different trajectories near basin boundaries because floating-point arithmetic is not associative: $(a + b) + c \neq a + (b + c)$ in general. The GPU's fused multiply-add (FMA) instructions further change the rounding behaviour. In chaotic regions, this $O(\epsilon_{\text{mach}})$ difference is amplified exponentially, producing different outcomes for the same initial conditions. This is not a bug — it is a direct consequence of deterministic chaos combined with finite-precision arithmetic. See [gpu.md](gpu.md) for the parity-testing approach.
 
 ---
 
@@ -499,6 +525,32 @@ boundary, the *bulk* distribution of heads vs. tails converges quickly.
 Most of the parameter space is solidly inside one basin.  Chaos lives at the
 boundaries, not in the bulk — echoing the connection between chaos and
 statistical mechanics from Section 7.
+
+The outcome map IS a fractal basin diagram — the same mathematical object studied in the context of driven oscillators and Hénon maps, but here arising from a completely physical system. See [drop_experiment.md](drop_experiment.md) for the experimental pipeline that generates these maps.
+
+---
+
+## Fractal basin boundaries
+
+The outcome map of a coin-toss experiment — where colour indicates which face lands up as a function of $(h, \theta)$ — is a **fractal basin diagram**. The boundary between the 'heads' and 'tails' basins is a fractal: it has infinite length in any finite region and its box-counting dimension exceeds 1.
+
+### Box-counting dimension
+
+To estimate the fractal dimension of the basin boundary:
+
+1. Cover the outcome map with a grid of boxes of side $\epsilon$.
+2. Count the number of boxes $N(\epsilon)$ that contain at least two different outcomes (i.e., they straddle the boundary).
+3. The box-counting dimension is:
+
+$$d_B = \lim_{\epsilon \to 0} \frac{\log N(\epsilon)}{\log(1/\epsilon)}$$
+
+In practice, compute $N(\epsilon)$ for several grid resolutions and fit the slope of $\log N$ vs $\log(1/\epsilon)$. For the coin toss, $d_B$ is typically between 1.3 and 1.7, depending on the height range — higher drops produce more complex boundaries.
+
+### Resolution dependence
+
+As the grid resolution increases (more height × angle points), the boundary does not simplify — it reveals ever-finer structure. This is the hallmark of a fractal. The fraction of grid points that land on the boundary (edge outcomes, or points adjacent to a different outcome) does not decrease toward zero; it approaches a constant determined by $d_B$.
+
+This explains why predicting a coin toss with certainty requires infinite precision in the initial conditions: the probability of landing on a basin boundary approaches zero, but the boundary is dense in the parameter space. See [drop_experiment.md](drop_experiment.md) for how the experiment reveals this structure.
 
 ---
 
