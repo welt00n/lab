@@ -89,12 +89,12 @@ def demo_cyclotron():
 
 
 def demo_drop(body_type="cube"):
-    from lab.systems.rigid_body import drop_cube, drop_coin, drop_rod
+    from lab.systems.rigid_body import drop_cube, drop_coin
     from lab.core import quaternion as quat
     from lab.visualization.animate2d import animate
     import matplotlib.pyplot as plt
 
-    builders = {"cube": drop_cube, "coin": drop_coin, "rod": drop_rod}
+    builders = {"cube": drop_cube, "coin": drop_coin}
     builder = builders.get(body_type, drop_cube)
     orientation = quat.from_axis_angle([1, 1, 0], 0.4)
 
@@ -189,7 +189,7 @@ def welcome():
   {GREEN}python main.py double{RESET}        Double pendulum — chaos
   {GREEN}python main.py kepler{RESET}        Kepler orbit tracing
   {GREEN}python main.py cyclotron{RESET}     Charged particle in B field
-  {GREEN}python main.py drop{RESET}          Rigid body drop  {DIM}[cube|coin|rod]{RESET}
+  {GREEN}python main.py drop{RESET}          Rigid body drop  {DIM}[cube|coin]{RESET}
   {GREEN}python main.py emwave{RESET}        EM pulse hitting a dielectric slab
   {GREEN}python main.py rays{RESET}          Light rays through a spherical lens
 

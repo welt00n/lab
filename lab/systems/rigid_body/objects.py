@@ -170,10 +170,12 @@ class RigidBody:
              orientation=None, angular_momentum=None, charge=0.0):
         I_diam = mass * radius**2 / 4.0
         I_axis = mass * radius**2 / 2.0
+        thickness = radius * 0.144  # ~1.75 mm for a quarter-sized coin
         inertia = np.array([I_diam, I_axis, I_diam])
         return cls(mass, inertia, position, momentum,
                    orientation, angular_momentum, charge,
-                   shape="coin", dimensions={"radius": radius, "thickness": 0.02})
+                   shape="coin", dimensions={"radius": radius,
+                                             "thickness": thickness})
 
     @classmethod
     def cube(cls, mass, side, position, momentum,

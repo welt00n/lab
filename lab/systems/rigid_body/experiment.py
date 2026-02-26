@@ -63,13 +63,13 @@ class RigidBodyExperiment:
         shape = body.shape if isinstance(body, RigidBody) else "particle"
         dims = body.dimensions if isinstance(body, RigidBody) else {}
         if shape == "cube":
-            size = dims.get("side", 0.3)
+            size = dims.get("side", 0.016)
         elif shape == "coin":
-            size = dims.get("radius", 0.15)
+            size = dims.get("radius", 0.01213)
         elif shape == "rod":
             size = dims.get("length", 1.0)
         else:
-            size = 0.3
+            size = 0.016
 
         H = Hamiltonian(
             ndof=7,
@@ -102,8 +102,8 @@ class RigidBodyExperiment:
         return np.concatenate([body.momentum, [0, 0, 0]])
 
 
-def drop_cube(side=0.3, mass=1.0, height=2.0, g=9.81, restitution=0.8,
-              friction=0.6, orientation=None, angular_momentum=None, **kw):
+def drop_cube(side=0.016, mass=0.008, height=1.0, g=9.81, restitution=0.6,
+              friction=0.5, orientation=None, angular_momentum=None, **kw):
     body = RigidBody.cube(
         mass=mass, side=side,
         position=np.array([0.0, height, 0.0]),
@@ -119,8 +119,9 @@ def drop_cube(side=0.3, mass=1.0, height=2.0, g=9.81, restitution=0.8,
     )
 
 
-def drop_coin(radius=0.15, mass=1.0, height=2.0, g=9.81, restitution=0.8,
-              friction=0.6, orientation=None, angular_momentum=None, **kw):
+def drop_coin(radius=0.01213, mass=0.00567, height=1.0, g=9.81,
+              restitution=0.6, friction=0.5, orientation=None,
+              angular_momentum=None, **kw):
     body = RigidBody.coin(
         mass=mass, radius=radius,
         position=np.array([0.0, height, 0.0]),

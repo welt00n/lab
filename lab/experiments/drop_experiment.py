@@ -285,3 +285,546 @@ def plot_drop_map(heights, angles, results, shape, tilt_axis="x", ax=None):
     ax.legend(handles=legend_elements, loc="upper right", fontsize=8)
 
     return fig, ax, img
+
+
+# ------------------------------------------------------------------
+# Animated result viewer with playback controls
+# ------------------------------------------------------------------
+
+def animate_drop_results(heights, angles, results, shape,
+                         tilt_axis="x", title_suffix=""):
+    """
+    Time-based animated reveal of a pre-computed outcome map with a
+    3D physical scene showing all bodies falling in real time.
+
+    Uses PyVista for GPU-accelerated 3D rendering when available,
+    falling back to matplotlib otherwise.
+
+    Parameters
+    ----------
+    heights, angles : array-like
+    results : ndarray, shape (nh, na) — integer outcomes
+    shape : str — "coin" or "cube"
+    tilt_axis : str
+    title_suffix : str — appended to the figure title
+    """
+    try:
+        from lab.visualization.pyvista_scene import DropScene, HAS_PYVISTA
+    except ImportError:
+        HAS_PYVISTA = False
+
+    if HAS_PYVISTA:
+        return _animate_pyvista(heights, angles, results, shape,
+                                tilt_axis, title_suffix)
+    return _animate_mpl_fallback(heights, angles, results, shape,
+                                 tilt_axis, title_suffix)
+
+
+def _animate_pyvista(heights, angles, results, shape,
+                     tilt_axis="x", title_suffix=""):
+    """PyVista 3D scene + matplotlib 2D panels for batch result replay."""
+    import time as _time
+    import matplotlib.pyplot as plt
+    import matplotlib.animation as animation
+    from matplotlib.widgets import Slider, Button
+    from matplotlib.patches import Patch
+    from lab.visualization.pyvista_scene import DropScene
+
+    from lab.experiments.live_dashboard import (
+        _step_all, _classify_jit, _qaa,
+        _SHAPE_TO_ID, COIN_RADIUS, CUBE_HALF_SIDE,
+    )
+
+    colors, labels = _SHAPE_PALETTE[shape]
+    nh, na = results.shape
+    g = 9.81
+    shape_id = _SHAPE_TO_ID[shape]
+
+    settle_times = np.sqrt(2.0 * np.maximum(heights, 0.01) / g) * 6.0
+    t_max = float(settle_times[-1])
+    n_frames = max(nh, 200)
+    time_axis = np.linspace(0, t_max, n_frames)
+    full_rgb = _results_to_rgb(results, colors)
+    extent = [np.degrees(angles[0]), np.degrees(angles[-1]),
+              heights[0], heights[-1]]
+
+    N = nh * na
+    body_grid = [(hi, ai) for hi in range(nh) for ai in range(na)]
+    ax_f, ay_f, az_f = {"x": (1., 0., 0.),
+                        "y": (0., 1., 0.),
+                        "z": (0., 0., 1.)}[tilt_axis]
+
+    s_pos = np.zeros((N, 3), dtype=np.float64)
+    s_mom = np.zeros((N, 3), dtype=np.float64)
+    s_ori = np.zeros((N, 4), dtype=np.float64)
+    s_amom = np.zeros((N, 3), dtype=np.float64)
+    s_alive = np.ones(N, dtype=np.bool_)
+    s_sc = np.zeros(N, dtype=np.int64)
+    s_alive_idx = np.arange(N, dtype=np.int64)
+    s_n_alive = [N]
+
+    for si, (hi, ai) in enumerate(body_grid):
+        s_pos[si] = [0.0, float(heights[hi]), 0.0]
+        w, x, y, z = _qaa(ax_f, ay_f, az_f, float(angles[ai]))
+        s_ori[si] = [w, x, y, z]
+
+    settle_h = {"coin": 5.0 * COIN_RADIUS,
+                "cube": 3.0 * CUBE_HALF_SIDE}.get(shape, 0.05)
+
+    # Grid offsets
+    obj_diam = 0.30
+    gap = max(0.08, 0.40 / max(1, max(nh, na) ** 0.5))
+    spacing = obj_diam + gap
+    scene_offsets = np.empty((N, 2), dtype=np.float64)
+    for si, (hi, ai) in enumerate(body_grid):
+        scene_offsets[si, 0] = (ai - (na - 1) / 2) * spacing
+        scene_offsets[si, 1] = (hi - (nh - 1) / 2) * spacing
+    max_h = float(heights.max())
+
+    # JIT warm-up
+    print("  Compiling 3D physics...", end=" ", flush=True)
+    _w = np.zeros((1, 3))
+    _wo = np.array([[1., 0., 0., 0.]])
+    _wa = np.ones(1, dtype=np.bool_)
+    _wi = np.zeros(1, dtype=np.int64)
+    _wsc = np.zeros(1, dtype=np.int64)
+    _step_all(_w.copy(), _w.copy(), _wo.copy(), _w.copy(),
+              _wa.copy(), _wsc.copy(), _wi.copy(), 1,
+              shape_id, 0.0005, 9.81, 0.6, 0.5, 0.05, 0.5, 1)
+    print("done.", flush=True)
+
+    # PyVista 3D scene
+    scene = DropScene(shape, N, scene_offsets, max_h,
+                      title=f"{shape} drop \u2014 result viewer")
+    scene.show_nonblocking()
+
+    # Matplotlib 2D panels + controls
+    fig = plt.figure(figsize=(15, 6))
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.4, 0.6],
+                          height_ratios=[1, 0.06],
+                          hspace=0.30, wspace=0.22,
+                          left=0.06, right=0.97, top=0.93, bottom=0.10)
+
+    ax_map = fig.add_subplot(gs[0, 0])
+    img = ax_map.imshow(full_rgb, origin="lower", aspect="auto",
+                        extent=extent, interpolation="nearest")
+    ax_map.set_xlabel(f"tilt about {tilt_axis}-axis (deg)")
+    ax_map.set_ylabel("height (m)")
+    ax_map.set_title(f"{shape} outcome map{title_suffix}")
+    legend_elems = [Patch(facecolor=c, edgecolor="gray", label=labels[v])
+                    for v, c in colors.items()]
+    ax_map.legend(handles=legend_elems, loc="upper right", fontsize=7)
+
+    ax_hist = fig.add_subplot(gs[0, 1])
+    outcome_keys = sorted(colors.keys())
+    bar_colors_list = [colors[k] for k in outcome_keys]
+    bar_labels_list = [labels[k] for k in outcome_keys]
+    bar_counts = [int(np.sum(results == k)) for k in outcome_keys]
+    bars = ax_hist.bar(range(len(outcome_keys)), bar_counts,
+                       color=bar_colors_list)
+    ax_hist.set_xticks(range(len(outcome_keys)))
+    ax_hist.set_xticklabels(bar_labels_list, fontsize=7, rotation=30)
+    ax_hist.set_ylabel("count")
+    ax_hist.set_title("distribution")
+    ax_hist.set_ylim(0, max(1, max(bar_counts)) * 1.15)
+
+    ax_slider = fig.add_subplot(gs[1, 0])
+    slider = Slider(ax_slider, "time (s)", 0, n_frames - 1,
+                    valinit=0, valstep=1, valfmt="%d")
+    slider.valtext.set_text("t = 0.00 s")
+
+    ax_play = fig.add_axes([0.72, 0.02, 0.06, 0.04])
+    ax_pbtn = fig.add_axes([0.79, 0.02, 0.06, 0.04])
+    ax_fwd = fig.add_axes([0.86, 0.02, 0.06, 0.04])
+    ax_back = fig.add_axes([0.65, 0.02, 0.06, 0.04])
+    btn_play = Button(ax_play, "> Play")
+    btn_pause = Button(ax_pbtn, "|| Pause")
+    btn_fwd = Button(ax_fwd, ">> Step")
+    btn_back = Button(ax_back, "<< Back")
+
+    dt_phys = 0.0005
+    dt_frame = t_max / n_frames
+    phys_steps_per_frame = max(1, int(dt_frame / dt_phys))
+
+    state = {"frame": 0, "playing": False, "updating": False,
+             "phys_frame": 0,
+             "play_wall_t0": 0.0, "play_sim_t0": 0.0}
+
+    def _reset_physics():
+        for si, (hi, ai) in enumerate(body_grid):
+            s_pos[si] = [0.0, float(heights[hi]), 0.0]
+            s_mom[si] = [0.0, 0.0, 0.0]
+            w, x, y, z = _qaa(ax_f, ay_f, az_f, float(angles[ai]))
+            s_ori[si] = [w, x, y, z]
+            s_amom[si] = [0.0, 0.0, 0.0]
+            s_alive[si] = True
+            s_sc[si] = 0
+        s_alive_idx[:N] = np.arange(N)
+        s_n_alive[0] = N
+        scene.reset()
+
+    def _step_physics_to(target_frame):
+        current = state["phys_frame"]
+        if target_frame < current:
+            _reset_physics()
+            current = 0
+        for f in range(current, target_frame):
+            n_al = s_n_alive[0]
+            if n_al == 0:
+                break
+            _, new_n = _step_all(
+                s_pos, s_mom, s_ori, s_amom, s_alive, s_sc,
+                s_alive_idx, n_al,
+                shape_id, dt_phys, g,
+                0.6, 0.5, 0.05, settle_h, phys_steps_per_frame)
+            s_n_alive[0] = new_n
+        state["phys_frame"] = target_frame
+
+    def _draw_frame(f):
+        if state["updating"]:
+            return
+        state["updating"] = True
+        f = max(0, min(f, n_frames - 1))
+        state["frame"] = f
+        t = time_axis[f]
+
+        _step_physics_to(f)
+
+        # Mark settled bodies in the 3D scene
+        for si in range(N):
+            if not s_alive[si]:
+                hi, ai = body_grid[si]
+                val = results[hi, ai]
+                c = colors.get(int(val), "#999999")
+                scene.mark_settled(si, c)
+
+        try:
+            scene.update_all(s_pos, s_ori, s_alive)
+            n_al = int(s_alive.sum())
+            scene.set_title(
+                f"{shape}s \u2014 t = {t:.1f} s \u2014 {n_al} falling")
+            scene.render()
+        except Exception:
+            pass
+
+        slider.set_val(f)
+        slider.valtext.set_text(f"t = {t:.2f} s")
+        fig.canvas.draw_idle()
+        state["updating"] = False
+
+    def on_slider(val):
+        _draw_frame(int(val))
+
+    def on_play(_):
+        state["playing"] = True
+        state["play_wall_t0"] = _time.monotonic()
+        state["play_sim_t0"] = time_axis[state["frame"]]
+
+    def on_pause(_):
+        state["playing"] = False
+
+    def on_fwd(_):
+        state["playing"] = False
+        _draw_frame(state["frame"] + 1)
+
+    def on_back(_):
+        state["playing"] = False
+        _draw_frame(state["frame"] - 1)
+
+    slider.on_changed(on_slider)
+    btn_play.on_clicked(on_play)
+    btn_pause.on_clicked(on_pause)
+    btn_fwd.on_clicked(on_fwd)
+    btn_back.on_clicked(on_back)
+
+    def _update(_anim_frame):
+        if not state["playing"]:
+            return
+        if state["frame"] >= n_frames - 1:
+            state["playing"] = False
+            return
+        elapsed = _time.monotonic() - state["play_wall_t0"]
+        target_t = state["play_sim_t0"] + elapsed
+        target_f = int(np.searchsorted(time_axis, target_t, side="right")) - 1
+        target_f = max(state["frame"], min(target_f, n_frames - 1))
+        if target_f != state["frame"]:
+            _draw_frame(target_f)
+
+    ani = animation.FuncAnimation(fig, _update, interval=33,
+                                  cache_frame_data=False)
+    _draw_frame(0)
+    plt.show()
+    scene.close()
+    return ani
+
+
+def _animate_mpl_fallback(heights, angles, results, shape,
+                          tilt_axis="x", title_suffix=""):
+    """Matplotlib-only fallback for animate_drop_results."""
+    import time as _time
+    import matplotlib.pyplot as plt
+    import matplotlib.animation as animation
+    from matplotlib.widgets import Slider, Button
+    from matplotlib.patches import Patch
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    from lab.experiments.live_dashboard import (
+        _coin_mesh, _cube_mesh, _transform_mesh,
+        _step_all, _classify_jit, _qaa,
+        _SHAPE_TO_ID, COIN_RADIUS, CUBE_HALF_SIDE,
+    )
+
+    colors, labels = _SHAPE_PALETTE[shape]
+    nh, na = results.shape
+    g = 9.81
+    shape_id = _SHAPE_TO_ID[shape]
+
+    settle_times = np.sqrt(2.0 * np.maximum(heights, 0.01) / g) * 6.0
+    t_max = float(settle_times[-1])
+
+    n_frames = max(nh, 200)
+    time_axis = np.linspace(0, t_max, n_frames)
+
+    full_rgb = _results_to_rgb(results, colors)
+    extent = [np.degrees(angles[0]), np.degrees(angles[-1]),
+              heights[0], heights[-1]]
+
+    N_total = nh * na
+    ns = N_total
+    body_grid = []
+    for hi in range(nh):
+        for ai in range(na):
+            body_grid.append((hi, ai))
+
+    ax_f, ay_f, az_f = {"x": (1., 0., 0.),
+                        "y": (0., 1., 0.),
+                        "z": (0., 0., 1.)}[tilt_axis]
+
+    s_pos = np.zeros((ns, 3), dtype=np.float64)
+    s_mom = np.zeros((ns, 3), dtype=np.float64)
+    s_ori = np.zeros((ns, 4), dtype=np.float64)
+    s_amom = np.zeros((ns, 3), dtype=np.float64)
+    s_alive = np.ones(ns, dtype=np.bool_)
+    s_sc = np.zeros(ns, dtype=np.int64)
+    s_alive_idx = np.arange(ns, dtype=np.int64)
+    s_n_alive = [ns]
+
+    for si, (hi, ai) in enumerate(body_grid):
+        s_pos[si] = [0.0, float(heights[hi]), 0.0]
+        w, x, y, z = _qaa(ax_f, ay_f, az_f, float(angles[ai]))
+        s_ori[si] = [w, x, y, z]
+
+    settle_h = {"coin": 5.0 * COIN_RADIUS,
+                "cube": 3.0 * CUBE_HALF_SIDE,
+                "rod": 0.55}.get(shape, 0.05)
+    ref_mesh = _coin_mesh() if shape == "coin" else _cube_mesh()
+
+    obj_diam = {"coin": 0.30, "cube": 0.30}.get(shape, 0.30)
+    gap = max(0.08, 0.40 / max(1, max(nh, na) ** 0.5))
+    scene_spacing = obj_diam + gap
+    scene_offsets = []
+    for si, (hi, ai) in enumerate(body_grid):
+        ox = (ai - (na - 1) / 2) * scene_spacing
+        oz = (hi - (nh - 1) / 2) * scene_spacing
+        scene_offsets.append((ox, oz))
+
+    print("  Compiling 3D physics...", end=" ", flush=True)
+    _w = np.zeros((1, 3))
+    _wo = np.array([[1., 0., 0., 0.]])
+    _wa = np.ones(1, dtype=np.bool_)
+    _wi = np.zeros(1, dtype=np.int64)
+    _wsc = np.zeros(1, dtype=np.int64)
+    _step_all(_w.copy(), _w.copy(), _wo.copy(), _w.copy(),
+              _wa.copy(), _wsc.copy(), _wi.copy(), 1,
+              shape_id, 0.0005, 9.81, 0.6, 0.5, 0.05, 0.5, 1)
+    print("done.", flush=True)
+
+    fig = plt.figure(figsize=(20, 9))
+    gs = fig.add_gridspec(2, 3, width_ratios=[1, 1.4, 0.6],
+                          height_ratios=[1, 0.06],
+                          hspace=0.30, wspace=0.22,
+                          left=0.04, right=0.97, top=0.93, bottom=0.10)
+
+    ax_scene = fig.add_subplot(gs[0, 0], projection="3d")
+    max_h = float(heights.max())
+    scene_w = na * scene_spacing / 2 + 0.3
+    scene_d = nh * scene_spacing / 2 + 0.3
+    ax_scene.set_xlim(-scene_w, scene_w)
+    ax_scene.set_ylim(-scene_d, scene_d)
+    ax_scene.set_zlim(-0.05, max_h * 1.1)
+    ax_scene.set_xlabel("x", fontsize=7)
+    ax_scene.set_ylabel("z", fontsize=7)
+    ax_scene.set_zlabel("height (m)", fontsize=8)
+    ax_scene.set_title(f"{shape}s \u2014 physical view")
+    ax_scene.view_init(elev=18, azim=-60)
+    ax_scene.xaxis.set_tick_params(labelsize=6)
+    ax_scene.yaxis.set_tick_params(labelsize=6)
+    ax_scene.zaxis.set_tick_params(labelsize=7)
+
+    fx = np.array([-scene_w, scene_w, scene_w, -scene_w])
+    fz = np.array([-scene_d, -scene_d, scene_d, scene_d])
+    fy = np.zeros(4)
+    floor_poly = Poly3DCollection(
+        [list(zip(fx, fz, fy))],
+        alpha=0.15, facecolors="#888888", edgecolors="#aaaaaa", linewidths=0.5)
+    ax_scene.add_collection3d(floor_poly)
+
+    face_color = "#7799bb" if shape == "coin" else "#bb9977"
+    edge_lw = 0.3 if ns > 50 else 0.4
+    mesh_alpha = 0.75 if ns > 100 else 0.85
+    mesh_collections = []
+    for si in range(ns):
+        ox, oz = scene_offsets[si]
+        faces = _transform_mesh(ref_mesh,
+                                s_ori[si, 0], s_ori[si, 1],
+                                s_ori[si, 2], s_ori[si, 3],
+                                ox, s_pos[si, 1], oz)
+        pc = Poly3DCollection(faces, alpha=mesh_alpha, facecolors=face_color,
+                              edgecolors="#333333", linewidths=edge_lw)
+        ax_scene.add_collection3d(pc)
+        mesh_collections.append(pc)
+
+    ax_map = fig.add_subplot(gs[0, 1])
+    img = ax_map.imshow(full_rgb, origin="lower", aspect="auto",
+                        extent=extent, interpolation="nearest")
+    ax_map.set_xlabel(f"tilt about {tilt_axis}-axis (deg)")
+    ax_map.set_ylabel("height (m)")
+    ax_map.set_title(f"{shape} outcome map{title_suffix}")
+    legend_elems = [Patch(facecolor=c, edgecolor="gray", label=labels[v])
+                    for v, c in colors.items()]
+    ax_map.legend(handles=legend_elems, loc="upper right", fontsize=7)
+
+    ax_hist = fig.add_subplot(gs[0, 2])
+    outcome_keys = sorted(colors.keys())
+    bar_colors = [colors[k] for k in outcome_keys]
+    bar_labels_list = [labels[k] for k in outcome_keys]
+    bar_counts = [int(np.sum(results == k)) for k in outcome_keys]
+    bars = ax_hist.bar(range(len(outcome_keys)), bar_counts,
+                       color=bar_colors)
+    ax_hist.set_xticks(range(len(outcome_keys)))
+    ax_hist.set_xticklabels(bar_labels_list, fontsize=7, rotation=30)
+    ax_hist.set_ylabel("count")
+    ax_hist.set_title("distribution")
+    ax_hist.set_ylim(0, max(1, max(bar_counts)) * 1.15)
+
+    ax_slider = fig.add_subplot(gs[1, :2])
+    slider = Slider(ax_slider, "time (s)", 0, n_frames - 1,
+                    valinit=0, valstep=1, valfmt="%d")
+    slider.valtext.set_text("t = 0.00 s")
+
+    ax_play = fig.add_axes([0.72, 0.02, 0.06, 0.04])
+    ax_pause = fig.add_axes([0.79, 0.02, 0.06, 0.04])
+    ax_fwd = fig.add_axes([0.86, 0.02, 0.06, 0.04])
+    ax_back = fig.add_axes([0.65, 0.02, 0.06, 0.04])
+    btn_play = Button(ax_play, "> Play")
+    btn_pause = Button(ax_pause, "|| Pause")
+    btn_fwd = Button(ax_fwd, ">> Step")
+    btn_back = Button(ax_back, "<< Back")
+
+    dt_phys = 0.0005
+    dt_frame = t_max / n_frames
+    phys_steps_per_frame = max(1, int(dt_frame / dt_phys))
+
+    state = {"frame": 0, "playing": False, "updating": False,
+             "phys_frame": 0,
+             "play_wall_t0": 0.0, "play_sim_t0": 0.0}
+
+    def _step_physics_to(target_frame):
+        current = state["phys_frame"]
+        if target_frame < current:
+            for si, (hi, ai) in enumerate(body_grid):
+                s_pos[si] = [0.0, float(heights[hi]), 0.0]
+                s_mom[si] = [0.0, 0.0, 0.0]
+                w, x, y, z = _qaa(ax_f, ay_f, az_f, float(angles[ai]))
+                s_ori[si] = [w, x, y, z]
+                s_amom[si] = [0.0, 0.0, 0.0]
+                s_alive[si] = True
+                s_sc[si] = 0
+            s_alive_idx[:ns] = np.arange(ns)
+            s_n_alive[0] = ns
+            current = 0
+        for f in range(current, target_frame):
+            n_al = s_n_alive[0]
+            if n_al == 0:
+                break
+            _, new_n = _step_all(
+                s_pos, s_mom, s_ori, s_amom, s_alive, s_sc,
+                s_alive_idx, n_al,
+                shape_id, dt_phys, g,
+                0.6, 0.5, 0.05, settle_h, phys_steps_per_frame)
+            s_n_alive[0] = new_n
+        state["phys_frame"] = target_frame
+
+    def _draw_frame(f):
+        if state["updating"]:
+            return
+        state["updating"] = True
+        f = max(0, min(f, n_frames - 1))
+        state["frame"] = f
+        t = time_axis[f]
+        _step_physics_to(f)
+        for si in range(ns):
+            ox, oz = scene_offsets[si]
+            faces = _transform_mesh(
+                ref_mesh,
+                s_ori[si, 0], s_ori[si, 1],
+                s_ori[si, 2], s_ori[si, 3],
+                ox, s_pos[si, 1], oz)
+            mesh_collections[si].set_verts(faces)
+            if not s_alive[si]:
+                hi, ai = body_grid[si]
+                val = results[hi, ai]
+                c = colors.get(int(val), "#999999")
+                mesh_collections[si].set_facecolors(c)
+        n_scene_alive = int(s_alive.sum())
+        ax_scene.set_title(
+            f"{shape}s \u2014 t = {t:.1f} s \u2014 "
+            f"{n_scene_alive} falling")
+        slider.set_val(f)
+        slider.valtext.set_text(f"t = {t:.2f} s")
+        fig.canvas.draw_idle()
+        state["updating"] = False
+
+    def on_slider(val):
+        _draw_frame(int(val))
+
+    def on_play(_):
+        state["playing"] = True
+        state["play_wall_t0"] = _time.monotonic()
+        state["play_sim_t0"] = time_axis[state["frame"]]
+
+    def on_pause(_):
+        state["playing"] = False
+
+    def on_fwd(_):
+        state["playing"] = False
+        _draw_frame(state["frame"] + 1)
+
+    def on_back(_):
+        state["playing"] = False
+        _draw_frame(state["frame"] - 1)
+
+    slider.on_changed(on_slider)
+    btn_play.on_clicked(on_play)
+    btn_pause.on_clicked(on_pause)
+    btn_fwd.on_clicked(on_fwd)
+    btn_back.on_clicked(on_back)
+
+    def _update(_anim_frame):
+        if not state["playing"]:
+            return
+        if state["frame"] >= n_frames - 1:
+            state["playing"] = False
+            return
+        elapsed = _time.monotonic() - state["play_wall_t0"]
+        target_t = state["play_sim_t0"] + elapsed
+        target_f = int(np.searchsorted(time_axis, target_t, side="right")) - 1
+        target_f = max(state["frame"], min(target_f, n_frames - 1))
+        if target_f != state["frame"]:
+            _draw_frame(target_f)
+
+    ani = animation.FuncAnimation(fig, _update, interval=33,
+                                  cache_frame_data=False)
+    _draw_frame(0)
+    plt.show()
+    return ani

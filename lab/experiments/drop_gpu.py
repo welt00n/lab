@@ -29,7 +29,23 @@ import numpy as np
 # ------------------------------------------------------------------
 
 def _setup_cuda_env():
-    """Point numba at the pip-installed CUDA toolkit libraries."""
+    """Point numba at the pip-installed CUDA toolkit libraries.
+
+    Pip splits the CUDA toolkit across ``nvidia-cuda-nvcc`` (nvvm) and
+    ``nvidia-cuda-runtime`` (cudart).  Numba expects a single CUDA_HOME
+    tree where both ``nvvm/lib64/`` and ``lib64/`` (for cudart) live.
+
+    We bridge the two packages by:
+      1. Creating versioned soname symlinks (``libnvvm.so.4``, etc.)
+         so numba's ``find_lib`` regex matches.
+      2. Symlinking cudart libraries into ``CUDA_HOME/lib64/`` so numba
+         finds them via its standard ``cudalib_dir`` lookup.
+      3. Pre-loading all ``.so`` files with ``ctypes.CDLL(RTLD_GLOBAL)``
+         so they are in-process for any later ``dlopen`` by name.
+    """
+    import ctypes
+    import subprocess
+
     try:
         import nvidia.cuda_nvcc as _nvcc
         import nvidia.cuda_runtime as _rt
@@ -41,10 +57,67 @@ def _setup_cuda_env():
 
     nvvm_lib = os.path.join(nvcc_root, "nvvm", "lib64")
     cudart_lib = os.path.join(rt_root, "lib")
+    cuda_home_lib64 = os.path.join(nvcc_root, "lib64")
 
+    # Ensure CUDA_HOME/lib64 exists
+    os.makedirs(cuda_home_lib64, exist_ok=True)
+
+    # --- Step 1: versioned soname symlinks in each lib dir ---
+    for lib_dir in (nvvm_lib, cudart_lib):
+        lib_path = Path(lib_dir)
+        if not lib_path.is_dir():
+            continue
+        for so in lib_path.glob("*.so"):
+            try:
+                out = subprocess.check_output(
+                    ["readelf", "-d", str(so)],
+                    stderr=subprocess.DEVNULL, text=True)
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                continue
+            for line in out.splitlines():
+                if "SONAME" not in line:
+                    continue
+                start = line.find("[")
+                end = line.find("]")
+                if start < 0 or end < 0:
+                    continue
+                soname = line[start + 1:end]
+                target = lib_path / soname
+                if not target.exists():
+                    try:
+                        target.symlink_to(so.name)
+                    except OSError:
+                        pass
+
+    # --- Step 2: symlink cudart libs into CUDA_HOME/lib64 ---
+    cudart_path = Path(cudart_lib)
+    home_lib = Path(cuda_home_lib64)
+    if cudart_path.is_dir():
+        for so in cudart_path.glob("libcudart*"):
+            link = home_lib / so.name
+            if not link.exists():
+                try:
+                    link.symlink_to(so.resolve())
+                except OSError:
+                    pass
+
+    # --- Step 3: pre-load into process address space ---
+    for lib_dir in (nvvm_lib, cudart_lib, cuda_home_lib64):
+        lib_path = Path(lib_dir)
+        if not lib_path.is_dir():
+            continue
+        for so in sorted(lib_path.glob("*.so*")):
+            if so.is_symlink() and not so.exists():
+                continue
+            try:
+                ctypes.CDLL(str(so), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+
+    # Set env vars — numba uses CUDA_HOME to locate the nvvm tree
     ld = os.environ.get("LD_LIBRARY_PATH", "")
     parts = ld.split(":") if ld else []
-    for d in (nvvm_lib, cudart_lib):
+    for d in (nvvm_lib, cudart_lib, cuda_home_lib64):
         if d not in parts:
             parts.insert(0, d)
     os.environ["LD_LIBRARY_PATH"] = ":".join(parts)
@@ -170,39 +243,56 @@ if HAS_CUDA:
                     1.0 - 2.0*(qx*qx + qy*qy))
 
     # ---------------------------------------------------------------
-    # Body shape parameters (hard-coded, no Python objects)
+    # Realistic body shape parameters (SI units)
     # ---------------------------------------------------------------
-    # Coin: mass=1, radius=0.15, thickness=0.02
-    # Cube: mass=1, side=0.3
-    # Rod:  mass=1, length=1.0, radius=0.02
+    # Coin: US quarter — radius 12.13 mm, thickness 1.75 mm, mass 5.67 g
+    # Cube: casino die — side 16 mm, mass 8 g
+    # Rod:  1 m, mass 1 kg (legacy)
+    _COIN_R = 0.01213
+    _COIN_HT = 0.000875
+    _COIN_M = 0.00567
+    _CUBE_HS = 0.008
+    _CUBE_M = 0.008
+    _ROD_HL = 0.5
+    _ROD_R = 0.02
+    _ROD_M = 1.0
+
+    @cuda.jit(device=True)
+    def get_mass(shape_id):
+        if shape_id == SHAPE_COIN:
+            return _COIN_M
+        elif shape_id == SHAPE_CUBE:
+            return _CUBE_M
+        else:
+            return _ROD_M
 
     @cuda.jit(device=True)
     def get_inertia(shape_id):
         """Return (Ix, Iy, Iz) for the shape."""
         if shape_id == SHAPE_COIN:
-            r = 0.15
-            Ix = 0.25 * r * r          # m*r^2/4
-            Iy = 0.5 * r * r           # m*r^2/2
-            Iz = 0.25 * r * r
+            m, r = _COIN_M, _COIN_R
+            Ix = m * 0.25 * r * r
+            Iy = m * 0.5 * r * r
+            Iz = m * 0.25 * r * r
             return Ix, Iy, Iz
         elif shape_id == SHAPE_CUBE:
-            s = 0.3
-            I = s * s / 6.0
+            m, s = _CUBE_M, 2.0 * _CUBE_HS
+            I = m * s * s / 6.0
             return I, I, I
         else:
-            L = 1.0
-            Ip = L * L / 12.0
-            return 1e-6, Ip, Ip
+            m, L = _ROD_M, 2.0 * _ROD_HL
+            Ip = m * L * L / 12.0
+            return 1e-6 * m, Ip, Ip
 
     @cuda.jit(device=True)
     def get_min_rest_height(shape_id):
         """Minimum CM height when resting on the most stable face."""
         if shape_id == SHAPE_COIN:
-            return 0.01      # half-thickness
+            return _COIN_HT
         elif shape_id == SHAPE_CUBE:
-            return 0.15      # side/2
+            return _CUBE_HS
         else:
-            return 0.0       # rod on floor has CM at 0
+            return _ROD_R
 
     # ---------------------------------------------------------------
     # Lowest point calculation
@@ -211,8 +301,8 @@ if HAS_CUDA:
     @cuda.jit(device=True)
     def lowest_point_coin(qw, qx, qy, qz, pos_y):
         """Return (min_world_y, lever_x, lever_y, lever_z)."""
-        r = 0.15
-        ht = 0.01  # half thickness
+        r = _COIN_R
+        ht = _COIN_HT
         best_y = 1e30
         best_lx = 0.0
         best_ly = 0.0
@@ -247,7 +337,7 @@ if HAS_CUDA:
 
     @cuda.jit(device=True)
     def lowest_point_cube(qw, qx, qy, qz, pos_y):
-        h = 0.15  # side/2
+        h = _CUBE_HS
         best_y = 1e30
         best_lx = 0.0
         best_ly = 0.0
@@ -268,8 +358,8 @@ if HAS_CUDA:
 
     @cuda.jit(device=True)
     def lowest_point_rod(qw, qx, qy, qz, pos_y):
-        half = 0.5  # length/2
-        rad = 0.02
+        half = _ROD_HL
+        rad = _ROD_R
         best_y = 1e30
         best_lx = 0.0
         best_ly = 0.0
@@ -327,7 +417,12 @@ if HAS_CUDA:
             shape_id, qw, qx, qy, qz, pos_y)
         penetration = world_y
         in_contact = penetration < 0.0
-        near_floor = penetration < 0.005
+        if shape_id == SHAPE_COIN:
+            near_floor = penetration < 3.0 * _COIN_R
+        elif shape_id == SHAPE_CUBE:
+            near_floor = penetration < 3.0 * _CUBE_HS
+        else:
+            near_floor = penetration < 0.05
 
         if in_contact:
             pos_y -= penetration
@@ -459,10 +554,17 @@ if HAS_CUDA:
         # Rolling resistance and rest detection
         if near_floor and rolling_resistance > 0.0:
             min_h = get_min_rest_height(shape_id)
+            if shape_id == SHAPE_COIN:
+                char_size = _COIN_R
+            elif shape_id == SHAPE_CUBE:
+                char_size = _CUBE_HS
+            else:
+                char_size = _ROD_R
+
             excess = pos_y - min_h
             if excess < 0.0:
                 excess = 0.0
-            stability = 1.0 - excess / 0.05
+            stability = 1.0 - excess / (3.0 * char_size)
             if stability < 0.0:
                 stability = 0.0
 
@@ -472,14 +574,14 @@ if HAS_CUDA:
                 Ly *= (1.0 - eff_rr)
                 Lz *= (1.0 - eff_rr)
 
-            at_rest = excess < 0.02
             ke_trans = (px*px + py*py + pz*pz) / (2.0 * mass)
             safe_Ix3 = Ix if Ix > 1e-30 else 1e-30
             safe_Iy3 = Iy if Iy > 1e-30 else 1e-30
             safe_Iz3 = Iz if Iz > 1e-30 else 1e-30
             ke_rot = 0.5 * (Lx*Lx/safe_Ix3 + Ly*Ly/safe_Iy3 + Lz*Lz/safe_Iz3)
             ke = ke_trans + ke_rot
-            if ke < 0.005 and at_rest:
+            ke_scale = mass * 9.81 * char_size
+            if excess < 2.0 * char_size and ke < 0.01 * ke_scale:
                 px = 0.0
                 py = 0.0
                 pz = 0.0
@@ -588,14 +690,17 @@ if HAS_CUDA:
         Lz = 0.0
 
         Ix, Iy, Iz = get_inertia(shape_id)
-        mass = 1.0
+        mass = get_mass(shape_id)
 
         # Settle detection
-        settle_h = 0.2
-        if shape_id == SHAPE_CUBE:
-            settle_h = 0.35
+        if shape_id == SHAPE_COIN:
+            settle_h = 5.0 * _COIN_R
+        elif shape_id == SHAPE_CUBE:
+            settle_h = 3.0 * _CUBE_HS
         elif shape_id == SHAPE_ROD:
             settle_h = 0.55
+        else:
+            settle_h = 0.05
 
         settled_count = 0
 
@@ -643,7 +748,8 @@ if HAS_CUDA:
             ke_rot = 0.5 * (Lx*Lx/safe_Ix + Ly*Ly/safe_Iy + Lz*Lz/safe_Iz)
             ke = ke_trans + ke_rot
 
-            if ke < 1e-6 and pos_y < settle_h:
+            ke_thr = mass * g * settle_h * 1e-4
+            if ke < ke_thr and pos_y < settle_h:
                 settled_count += 1
                 if settled_count > 200:
                     break
@@ -658,7 +764,7 @@ if HAS_CUDA:
 # ====================================================================
 
 def sweep_drop_gpu(shape, heights, angles, tilt_axis="x",
-                   dt=0.001, restitution=0.6, friction=0.5,
+                   dt=0.0005, restitution=0.6, friction=0.5,
                    rolling_resistance=0.05, g=9.81, duration=None):
     """
     GPU-accelerated parameter sweep.

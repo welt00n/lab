@@ -21,7 +21,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from lab.experiments.drop_experiment import (
-    sweep_drop, plot_drop_map, _SHAPE_PALETTE,
+    sweep_drop, plot_drop_map, animate_drop_results, _SHAPE_PALETTE,
 )
 
 SHAPE = "cube"
@@ -59,10 +59,8 @@ def _run_batch(args):
     elapsed = time.time() - t0
     print(f"\nDone in {elapsed:.1f}s ({total / max(elapsed, 1e-9):.0f} sims/sec)")
 
-    fig, ax, img = plot_drop_map(heights, angles, results.astype(int),
-                                 SHAPE, args.axis)
-    ax.set_title(f"{SHAPE} drop outcome — tilt about {args.axis}-axis")
-    plt.show()
+    animate_drop_results(heights, angles, results.astype(int), SHAPE,
+                         tilt_axis=args.axis, title_suffix=" (CPU)")
 
 
 def _run_gpu(args):
@@ -73,6 +71,11 @@ def _run_gpu(args):
     angles = np.linspace(0, 2 * np.pi, args.na, endpoint=False)
 
     info = gpu_info()
+    if info is None:
+        print("ERROR: CUDA is not available. Install with:")
+        print("  pip install numba nvidia-cuda-nvcc-cu12==12.4.* "
+              "nvidia-cuda-runtime-cu12==12.4.*")
+        sys.exit(1)
     print(f"{SHAPE.title()} drop experiment (GPU)")
     print(f"  device:  {info['name']}")
     print(f"  grid:    {args.nh} x {args.na} = {total} simulations")
@@ -86,9 +89,8 @@ def _run_gpu(args):
     elapsed = time.time() - t0
     print(f"Done in {elapsed:.3f}s ({total / max(elapsed, 1e-9):.0f} sims/sec)")
 
-    fig, ax, img = plot_drop_map(heights, angles, results, SHAPE, args.axis)
-    ax.set_title(f"{SHAPE} drop outcome (GPU) — tilt about {args.axis}-axis")
-    plt.show()
+    animate_drop_results(heights, angles, results, SHAPE,
+                         tilt_axis=args.axis, title_suffix=" (GPU)")
 
 
 def _run_live(args):

@@ -7,7 +7,7 @@ _lab_main_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local demos="oscillator coupled pendulum double kepler cyclotron drop emwave rays"
-    local drop_types="cube coin rod"
+    local drop_types="cube coin"
 
     if [[ "$prev" == "drop" ]]; then
         COMPREPLY=($(compgen -W "$drop_types" -- "$cur"))
@@ -45,7 +45,6 @@ complete -F _lab_main_completions -o default python3 main.py
 # experiment scripts
 complete -F _lab_drop_experiment_completions -o default experiments/drop_coin.py
 complete -F _lab_drop_experiment_completions -o default experiments/drop_cube.py
-complete -F _lab_drop_experiment_completions -o default experiments/drop_rod.py
 
 # also match when invoked via python
 _lab_experiment_dispatch() {
