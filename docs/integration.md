@@ -140,3 +140,348 @@ sequenceDiagram
 
     Note over W: time += dt
 ```
+
+---
+
+## Local vs global error
+
+When we say an integrator is "order $p$", we mean its **local truncation
+error** — the error introduced in a single step — is $O(dt^{p+1})$.  The
+extra power of $dt$ matters once we accumulate errors over an entire
+simulation.
+
+### Local truncation error
+
+Consider advancing from $t_n$ to $t_n + dt$.  If $y(t)$ is the exact
+solution, the local truncation error (LTE) is
+
+$$
+\text{LTE} = y(t_n + dt) - y_{n+1} = C \, dt^{p+1} + O(dt^{p+2})
+$$
+
+where $C$ depends on the method and the derivatives of $y$.
+
+### Global error
+
+A simulation of total time $T$ requires $N = T / dt$ steps.  Each step
+contributes an error of order $dt^{p+1}$.  In the worst case, these errors
+add coherently:
+
+$$
+E_{\text{global}} \sim N \times \text{LTE} = \frac{T}{dt} \cdot O(dt^{p+1}) = O(dt^p)
+$$
+
+The factor of $1/dt$ from the number of steps eats one power of $dt$,
+so a method with local order $p+1$ has **global order** $p$.
+
+### Concrete comparison: leapfrog vs RK4
+
+| Method   | Order $p$ | LTE           | Global error ($dt = 0.01$) |
+|----------|-----------|---------------|----------------------------|
+| Leapfrog | 2         | $O(dt^3)$     | $O(dt^2) \approx 10^{-4}$  |
+| RK4      | 4         | $O(dt^5)$     | $O(dt^4) \approx 10^{-8}$  |
+
+RK4 is more accurate per step.  But accuracy is not everything — the
+next section explains why leapfrog can still win over long times.
+
+## The modified Hamiltonian
+
+The deepest reason to prefer leapfrog for Hamiltonian systems is not
+accuracy-per-step; it is the existence of a **shadow Hamiltonian**.
+
+### Shadow Hamiltonian
+
+Backward error analysis shows that a symplectic integrator with timestep
+$dt$ does not conserve the true Hamiltonian $H$ exactly.  Instead, it
+**exactly** conserves a nearby modified (or "shadow") Hamiltonian:
+
+$$
+\tilde{H} = H + c_2 \, dt^2 \, H_2 + c_4 \, dt^4 \, H_4 + \cdots
+$$
+
+where the correction terms $H_2, H_4, \ldots$ are computable functions
+on phase space that depend on $H$ and its derivatives.  The series is
+asymptotic (generally divergent), but for small $dt$ the first few terms
+give an excellent approximation.
+
+### Bounded, oscillatory energy error
+
+Because the trajectory lies on a level set of $\tilde{H}$ rather than
+$H$, the energy error at any time satisfies
+
+$$
+|H(t) - H(0)| = O(dt^2)
+$$
+
+and this error is **bounded and oscillatory** — it does not grow with
+time.  The trajectory effectively wobbles around a true orbit on a
+nearby energy surface.
+
+### Contrast with non-symplectic methods
+
+For a non-symplectic integrator like RK4, no shadow Hamiltonian exists.
+The energy error is smaller at first ($O(dt^4)$ per step), but it
+**drifts monotonically**.  After $N$ steps:
+
+$$
+\Delta H_{\text{RK4}} \sim N \cdot O(dt^5) = \frac{T}{dt} \cdot O(dt^5) = O(T \, dt^4)
+$$
+
+This grows linearly with simulation time $T$.
+
+### Why this matters in practice
+
+For a simulation running $10^6$ steps:
+
+- **Leapfrog**: energy error stays $O(dt^2)$ throughout, oscillating
+  around zero.  The error at step $10^6$ is the same order as at
+  step $1$.
+- **RK4**: energy drift is $\sim 10^6 \times O(dt^5)$ and increases
+  steadily.  For long integrations this can push the system onto
+  qualitatively wrong trajectories.
+
+This is why every molecular-dynamics code, every orbital-mechanics
+integrator, and our own `lab/core/integrators.py` defaults to
+symplectic methods for Hamiltonian systems.
+
+## Stability analysis
+
+Accuracy tells us how close the numerical solution is to the true one
+when $dt$ is small.  **Stability** tells us whether the numerical
+solution stays bounded at all.
+
+### The test equation
+
+The standard probe is the scalar ODE
+
+$$
+\frac{dy}{dt} = \lambda \, y, \qquad \lambda \in \mathbb{C}
+$$
+
+with exact solution $y(t) = e^{\lambda t} \, y(0)$.  Applying an
+integrator to this equation reduces each step to multiplication by an
+**amplification factor** $g(\lambda \, dt)$.  The method is stable when
+$|g| \le 1$.
+
+### Forward Euler
+
+One step of forward Euler gives
+
+$$
+y_{n+1} = (1 + \lambda \, dt) \, y_n
+$$
+
+so the amplification factor is $g = 1 + z$ where $z = \lambda \, dt$.
+The stability region is
+
+$$
+|1 + z| \le 1
+$$
+
+which is a disk of radius 1 centred at $z = -1$ in the complex plane.
+This is a small region — purely imaginary $\lambda$ (oscillatory
+problems) lies on the imaginary axis, which is *outside* the disk.
+Forward Euler is **unstable for undamped oscillators**.
+
+### RK4
+
+The amplification factor is the truncated exponential:
+
+$$
+g(z) = 1 + z + \frac{z^2}{2} + \frac{z^3}{6} + \frac{z^4}{24}
+$$
+
+The stability region $|g(z)| \le 1$ is much larger and extends slightly
+along the imaginary axis (roughly $|z_{\text{imag}}| \le 2\sqrt{2}$).
+RK4 can handle mildly oscillatory problems, but eventually the imaginary
+axis leaves the stability region.
+
+### Leapfrog and the harmonic oscillator
+
+For the harmonic oscillator $\ddot{x} = -\omega^2 x$, the leapfrog
+amplification matrix has eigenvalues on the **unit circle** as long as
+
+$$
+\omega \, dt \le 2
+$$
+
+On the unit circle $|g| = 1$ exactly — no amplification, no damping.
+This is the hallmark of a symplectic method: the numerical flow preserves
+area in phase space.  Beyond $\omega \, dt = 2$ the eigenvalues leave
+the unit circle and the scheme blows up.
+
+### CFL condition for wave equations
+
+When solving the wave equation $\partial_{tt} u = c^2 \, \nabla^2 u$
+on a spatial grid with spacing $\Delta x$, the highest resolvable
+frequency is $\omega_{\max} = 2c / \Delta x$.  Applying the leapfrog
+stability criterion $\omega_{\max} \, dt \le 2$ yields the
+**Courant–Friedrichs–Lewy (CFL) condition**:
+
+$$
+\frac{c \, dt}{\Delta x} \le 1
+$$
+
+In $d$ dimensions this generalises to
+
+$$
+c \, dt \le \frac{\Delta x}{\sqrt{d}}
+$$
+
+Our FDTD electromagnetic-wave solver enforces this automatically — see
+`lab/systems/emwave.py`, which computes and prints the Courant number
+at initialisation and raises an error if the condition is violated.
+
+## Adaptive step control
+
+Fixed-timestep methods waste work in smooth regions and risk inaccuracy
+in regions of rapid variation.  Adaptive methods adjust $dt$ on the fly
+to keep the local error near a user-specified tolerance.
+
+### The embedded RK45 pair
+
+The Dormand–Prince method (the standard "RK45") embeds a 4th-order and
+a 5th-order Runge–Kutta method that share the same intermediate stages.
+At each step we compute:
+
+- $y_{n+1}^{(4)}$ — the 4th-order estimate
+- $y_{n+1}^{(5)}$ — the 5th-order estimate
+
+The cost is six function evaluations per step (with FSAL — "first same
+as last" — reuse from the previous step).
+
+### Error estimate
+
+The difference between the two estimates gives a cheap approximation to
+the local truncation error of the 4th-order method:
+
+$$
+\text{err} = \| y^{(4)}_{n+1} - y^{(5)}_{n+1} \|
+$$
+
+This costs nothing beyond the stages we already computed.
+
+### Step-size controller
+
+Given a tolerance $\varepsilon$ and the current error estimate, the new
+step size is
+
+$$
+dt_{\text{new}} = S \cdot dt_{\text{old}} \cdot \left( \frac{\varepsilon}{\text{err}} \right)^{1/(p+1)}
+$$
+
+where $p = 4$ is the order of the lower method and $S \approx 0.9$ is a
+**safety factor** that prevents the controller from being too aggressive.
+
+The controller logic:
+
+1. **Accept** the step if $\text{err} \le \varepsilon$.  Advance $t$
+   and optionally grow $dt$.
+2. **Reject** the step if $\text{err} > \varepsilon$.  Shrink $dt$ and
+   redo the step from $t_n$.
+
+Additional safeguards prevent extreme changes:
+
+$$
+0.2 \le \frac{dt_{\text{new}}}{dt_{\text{old}}} \le 5.0
+$$
+
+This **min/max clamp** prevents the step size from collapsing or
+exploding in a single adjustment.
+
+### When to use adaptive stepping
+
+Adaptive methods are ideal for problems where the timescale varies —
+close encounters in $N$-body gravity, stiff chemical kinetics, or
+chaotic flows near separatrices.  They are **not** symplectic, so they
+should not replace leapfrog for long-horizon Hamiltonian problems unless
+energy conservation is unimportant.
+
+Our implementation lives in `lab/core/integrators.py::rk45_adaptive`.
+It follows the Dormand–Prince tableau and the step controller described
+above.
+
+## The half-kick artefact and settle detection
+
+When leapfrog is combined with a hard constraint (the floor), an operator-
+splitting subtlety arises that affects settle detection.
+
+### The problem
+
+Consider a rigid body that has come to rest on the floor.  The leapfrog
+step proceeds as:
+
+1. **First half-kick**: $p_y \leftarrow p_y - mg \cdot dt/2$.  The body
+   acquires downward momentum $\Delta p = -mg \cdot dt/2 \approx -0.0049$.
+2. **Drift**: the body moves downward, penetrating the floor.
+3. **Floor constraint**: detects penetration, lifts the body, applies an
+   impulse.  If the energy is low enough, the constraint zeros all
+   momenta ($p = 0$, $L = 0$).
+4. **Second half-kick**: $p_y \leftarrow p_y - mg \cdot dt/2$.  The body
+   again acquires $\Delta p \approx -0.0049$.
+
+After step 4, the momentum is **never zero** — even though the floor
+constraint just zeroed it.  The residual kinetic energy is
+
+$$
+KE_{\text{residual}} = \frac{(mg \cdot dt/2)^2}{2m}
+= \frac{m g^2 dt^2}{8}
+\approx 1.2 \times 10^{-5}\;\text{J}
+$$
+
+for $m = 1\;\text{kg}$, $g = 9.81\;\text{m/s}^2$, $dt = 0.001\;\text{s}$.
+This is a pure artefact of the operator splitting — the body is physically
+at rest, but the integrator's half-kick injects a small momentum quantum
+every step that the constraint then removes, only for the second half-kick
+to reinject it.
+
+### Why this blocks settle detection
+
+The settle condition checks $KE < \epsilon$ for some threshold $\epsilon$.
+If $\epsilon < KE_{\text{residual}}$, the body **never** settles, even
+though it is visually at rest.  With $\epsilon = 10^{-6}$ and
+$KE_{\text{residual}} = 1.2 \times 10^{-5}$, the condition always fails.
+
+### The fix: check between constraint and second half-kick
+
+The solution is to place the settle check **between steps 3 and 4** — after
+the constraint has zeroed the momentum but before the second half-kick
+reinjects it:
+
+```
+half-kick 1 → drift → quaternion drift → constraint → SETTLE CHECK → half-kick 2
+```
+
+At this point, if the constraint zeroed all momenta, $KE = 0$ exactly, and
+the settle condition triggers reliably.
+
+This is implemented in `lab/experiments/live_dashboard.py::_step_all`:
+
+```python
+# Floor constraint (may zero all momenta)
+(pos, mom, ori, amom) = _floor(...)
+
+# Settle detection — BEFORE second half-kick
+ke = translational_ke + rotational_ke
+if ke < threshold and pos_y < settle_h:
+    sc[k] += 1
+    if sc[k] > 100:
+        alive[k] = False
+
+# Second half-kick
+mom[k, 1] -= mass * g * half_dt
+```
+
+### General principle
+
+When combining symplectic integrators with non-conservative operators
+(constraints, damping, dissipation), the **placement** of the non-
+conservative step within the splitting matters.  Observables should be
+sampled at the point in the cycle where the state is most physically
+meaningful — typically after the constraint has been enforced but before
+the next kick contaminates the state.
+
+This is a specific instance of a more general issue in **operator splitting**:
+the intermediate states between split operators are not all equally physical.
+The half-kick state has position and momentum "staggered" in time by $dt/2$;
+the post-constraint state is the most self-consistent snapshot.

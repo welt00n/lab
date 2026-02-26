@@ -6,6 +6,117 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.5.0] — 2026-02-26
+
+### Added
+- **JIT-compiled live dashboard** (`lab/experiments/live_dashboard.py`).
+  The `--live` flag now opens a three-panel animation where all grid points
+  drop simultaneously as a 3D scatter, the outcome map fills in real time,
+  and a histogram tracks the distribution.
+  - Physics reimplemented as `@njit(cache=True)` scalar functions — same
+    leapfrog + floor-constraint math as the GPU kernel, compiled to native
+    x86-64 via Numba.
+  - ~300× faster than Python `World` objects: 2400 bodies × 10 steps in
+    ~8 ms, enabling interactive frame rates.
+  - Compiled binaries cached to disk; first run compiles in ~2 s, subsequent
+    runs start instantly.
+  - Single-thread architecture: physics + rendering on the main thread inside
+    `FuncAnimation.update()`.  No background workers, no queues, no deadlocks.
+  - `scatter3D` rendering — one draw call for all N objects, updated via
+    `_offsets3d` and `set_facecolors`.
+  - Vectorised colour/position updates using numpy indexing.
+- **Settle-detection fix**: the energy check now runs *between* the floor
+  constraint and the second leapfrog half-kick, avoiding the operator-
+  splitting artefact where the half-kick reinjects residual momentum into
+  a body that is physically at rest.
+- **Force-settle timeout**: bodies that remain below `settle_h` for 5000
+  cumulative steps are declared settled regardless of residual KE, preventing
+  infinite rocking in quasi-periodic edge cases.
+- **Near-floor damping zone** widened from 0.005 m to 0.05 m, with
+  progressive linear velocity damping (0.998× per step) and a more aggressive
+  KE snap-to-zero threshold (0.1 J within 0.05 m of rest height).
+
+### Changed
+- **3D visualisation axes remapped for physical clarity**: z-axis now shows
+  true height (metres), x-axis shows the tilt-angle parameter offset, y-axis
+  shows the initial drop-height parameter offset.  Camera view set to
+  `elev=20, azim=-50` for a natural perspective.  Tick formatting cleaned up
+  with `MaxNLocator(5)` and smaller fonts.
+- Default `--hmax` raised from 3.0 m to 5.0 m in all three experiment
+  scripts to better illustrate chaotic behaviour at higher drop heights.
+- **`completions.bash` rewritten** — now provides flag completion for the
+  experiment scripts (`--nh`, `--na`, `--hmin`, `--hmax`, `--axis`,
+  `--workers`, `--gpu`, `--live`) and axis-value completion after `--axis`.
+  A dispatcher routes completion to the correct handler based on script name.
+- `experiments/drop_coin.py`, `drop_cube.py`, `drop_rod.py` — `--live` and
+  `--gpu` flags are no longer mutually exclusive.
+- **Documentation overhaul**:
+  - `docs/architecture.md` — new "Live dashboard" section with architecture
+    diagram, "Three implementations" comparison table.
+  - `docs/gpu.md` — new Section 8: "`@njit` — the CPU counterpart",
+    covering write-once-compile-twice, caching, and performance comparison.
+  - `docs/integration.md` — new section on the half-kick artefact and
+    correct settle-detection placement within operator splitting.
+  - `docs/numerical_methods.md` — new Section 6: "Damping strategies and
+    settle detection", covering energy thresholds, damping mechanisms,
+    and the force-settle timeout.
+  - `docs/parallelism.md` — new section: "Real-time animation: why the main
+    thread wins", comparing threaded vs single-thread approaches with
+    performance data.
+  - `docs/chaos.md` — new Section 9: "Watching chaos unfold: the live
+    dashboard", connecting the real-time fill pattern to prediction horizons
+    and basin geometry.
+  - `docs/physics.md` — new section: "Contact physics and dissipation",
+    covering impulse-momentum equations, inertia tensor rotation, Coulomb
+    friction, rolling resistance, and shape-dependent resting states.
+
+---
+
+## [0.4.0] — 2026-02-25
+
+### Added
+- **GPU-accelerated drop sweeps** via Numba CUDA (`lab/experiments/drop_gpu.py`).
+  The entire height × tilt-angle grid runs in parallel on the GPU — one CUDA
+  thread per simulation.  On an RTX 3080, a 40×60 grid completes in ~1.4 s
+  versus ~55 s on CPU (40× speedup).
+  - Quaternion math, leapfrog integration, floor constraint, and outcome
+    classification reimplemented as `@cuda.jit(device=True)` device functions.
+  - `drop_kernel` — main CUDA kernel, one thread per simulation.
+  - `sweep_drop_gpu()` — host function handling memory transfer, grid/block
+    sizing, kernel launch, and copy-back.
+  - Auto-detection of pip-installed CUDA toolkit via `_setup_cuda_env()`.
+- **`--gpu` flag** on `experiments/drop_coin.py`, `drop_cube.py`, `drop_rod.py`
+  to run sweeps on the GPU instead of CPU multiprocessing.
+- **`--live` flag** for real-time animation during CPU sweeps.  Simulations run
+  in a background thread; a `FuncAnimation` loop on the main thread updates the
+  outcome map and a histogram panel as results arrive via a `Queue`.
+- **GPU tests** (`tests/test_drop_gpu.py`) — 9 tests covering:
+  - Device function correctness (quaternion operations vs CPU module).
+  - GPU vs CPU result parity (>=40% match on chaotic boundary conditions).
+  - Fallback behaviour when CUDA is unavailable.
+- **New documentation**:
+  - `docs/numerical_methods.md` — IEEE 754 floating point, finite differences,
+    convergence order, CFL stability, symplectic structure preservation.
+  - `docs/parallelism.md` — processes vs threads, Amdahl's law, Flynn's
+    taxonomy (SIMD/SIMT), memory hierarchy, CPU vs GPU comparison.
+  - `docs/gpu.md` — CUDA programming model, device functions, thread indexing,
+    memory model, divergence, grid sizing, performance analysis, setup guide.
+  - `docs/chaos.md` — deterministic chaos, Lyapunov exponents, fractal basins,
+    double pendulum, ergodic hypothesis, GPU-vs-CPU divergence as chaos demo.
+
+### Changed
+- `docs/physics.md` expanded with Lagrangian mechanics, Legendre transform,
+  Noether's theorem, Poisson brackets, and phase space topology.
+- `docs/integration.md` expanded with local/global error, modified Hamiltonian
+  theory, stability analysis, and adaptive step control.
+- `docs/architecture.md` expanded with software design principles (framework vs
+  library, plugin architecture, separation of concerns) and GPU execution path.
+- `requirements.txt` now includes `numba`.
+- Runner scripts (`drop_coin.py`, `drop_cube.py`, `drop_rod.py`) rewritten with
+  `--gpu`/`--live` mutual exclusion group and cleaner code organisation.
+
+---
+
 ## [0.3.0] — 2026-02-23
 
 ### Added

@@ -48,7 +48,9 @@ physics/
 │   │
 │   └── experiments/           Experiment modules
 │       ├── coin_toss.py       Coin toss: deterministic chaos demo
-│       └── drop_experiment.py Parallel rigid-body drop sweeps
+│       ├── drop_experiment.py Parallel rigid-body drop sweeps
+│       ├── drop_gpu.py        GPU-accelerated drop sweeps (CUDA)
+│       └── live_dashboard.py  Real-time 3-panel animation (JIT physics)
 │
 ├── tests/                     106 unit and integration tests
 ├── experiments/               Runnable experiment scripts
@@ -143,6 +145,26 @@ The FDTD solver operates on field grids rather than particles. It has its own `F
 
 Geometric optics fits the Hamiltonian framework directly: $H = |p| / n(q)$. Light rays are just particles whose "potential" comes from the refractive index field. Uses the standard `Experiment` runner and `DataSet`.
 
+## Software design principles
+
+### Framework vs library
+
+A library is code *you* call; a framework calls *you* (inversion of control, a.k.a. the "Hollywood Principle": *don't call us, we'll call you*). Our `Experiment` class is the framework entry point — you supply $H$, initial conditions, and a time step; it controls execution, calling the integrator, collecting the trajectory, and returning a `DataSet`. The rigid-body `World` class works the same way: you register fields and constraints, it orchestrates the physics loop. User code never manually advances time or resolves collisions.
+
+### Plugin architecture
+
+Fields, constraints, and environments are **plugins**. You register them with `World`; the framework orchestrates their interaction each time step. This follows the **open/closed principle**: the system is *open for extension* (add a new field class, a new constraint, a new environment preset) and *closed for modification* (you never need to edit `World` to support a new force law). The same pattern applies at the top level — adding a new `Hamiltonian` subclass extends the library without touching the core.
+
+### Separation of concerns (formal)
+
+The **Single Responsibility Principle** is the guiding rule:
+
+- The **Hamiltonian** knows physics (energy, forces).
+- The **Integrator** knows numerics (time stepping, error control).
+- The **Visualizer** knows matplotlib (axes, animation frames).
+
+None of these layers knows about the others' internals. This is why we can add a GPU backend without changing physics code: the GPU module reimplements the *integrator* loop in CUDA while the Hamiltonian definitions and visualization stay untouched.
+
 ## Demos
 
 Run `python main.py` for the full list. Each demo creates a system, runs a simulation, and shows an animated matplotlib window:
@@ -167,9 +189,64 @@ Standalone scripts in `experiments/` run larger parameter sweeps, using CPU mult
 python experiments/drop_coin.py              # coin: 40×60 grid, all CPUs
 python experiments/drop_cube.py --nh 60 --na 90   # cube: finer grid
 python experiments/drop_rod.py  --axis z --workers 4
+python experiments/drop_coin.py --gpu          # GPU (CUDA)
+python experiments/drop_coin.py --live         # live animation
 ```
 
 Each prints real-time progress (percentage, elapsed time, ETA) and shows a color-coded outcome map at the end.
+
+### Live dashboard (`--live`)
+
+The `--live` flag opens a three-panel animation where **all grid points drop simultaneously** in a 3D scatter view, and the outcome map and histogram fill in real time as objects settle:
+
+```
+python experiments/drop_coin.py --live              # CPU JIT
+python experiments/drop_coin.py --live --nh 10 --na 15   # smaller grid, smoother
+```
+
+This mode runs the physics on the **main thread** inside `FuncAnimation.update()` — there are no background workers, no queues, and no deadlocks. The architecture is:
+
+```mermaid
+flowchart LR
+    INIT["Initialise N state arrays<br/>(pos, mom, ori, amom)"]
+    INIT --> WARM["JIT warm-up<br/>(compile _step_all)"]
+    WARM --> ANIM["FuncAnimation loop"]
+    ANIM --> STEP["_step_all<br/>(numba @njit)"]
+    STEP --> RENDER["scatter3D update<br/>+ outcome map"]
+    RENDER --> ANIM
+```
+
+| Component | Technology | Why |
+|---|---|---|
+| Physics stepper | `numba @njit(cache=True)` | ~1 ms per frame for 2400 bodies; 100–1000× faster than Python `World` objects |
+| 3D rendering | `ax.scatter()` | One draw call for all N objects; updating `_offsets3d` is O(N) |
+| Outcome map | `imshow` with live `set_data` | Standard matplotlib, updates only when new objects settle |
+| Threading | None | Eliminates deadlocks, queue blocking, and GIL contention |
+
+The JIT physics module (`lab/experiments/live_dashboard.py`) reimplements the same leapfrog + floor-constraint physics as the CPU `World` and the GPU kernel, but as flat `@njit` scalar functions. Compiled code is cached to disk; first run compiles in ~2 s, subsequent runs start instantly.
+
+## GPU acceleration
+
+The drop experiments support dual execution paths: **CPU** (multiprocessing, the default) and **GPU** (CUDA via CuPy). Both paths produce identical `DataSet` results — the physics code (`Hamiltonian`, `World`, fields, constraints) is shared; only the parallel-sweep loop differs:
+
+| Path | Backend | Parallelism | Flag |
+|------|---------|-------------|------|
+| CPU | numpy + multiprocessing | one simulation per core | *(default)* |
+| GPU | CuPy (CUDA) | thousands of simulations as a single batched kernel | `--gpu` |
+
+The GPU path lives in `lab/experiments/drop_gpu.py` and is a drop-in replacement for the CPU sweep — same inputs, same outputs, ~10–50× faster on large grids. See [docs/gpu.md](gpu.md) for hardware requirements, installation, benchmarks, and implementation details.
+
+### Three implementations of the same physics
+
+The codebase now has three implementations of rigid-body leapfrog + floor constraint:
+
+| Module | Decorator | Runs on | Abstraction level | Primary use |
+|---|---|---|---|---|
+| `rigid_body/world.py` | None (pure Python) | CPU | OOP (`World`, `RigidBody`) | Reference implementation, demos, tests |
+| `drop_gpu.py` | `@cuda.jit(device=True)` | GPU | Scalar device functions | Batch parameter sweeps |
+| `live_dashboard.py` | `@njit(cache=True)` | CPU (compiled) | Scalar JIT functions | Real-time animation |
+
+All three implement the same leapfrog splitting (half-kick → drift → constraint → half-kick), the same floor-constraint impulse model, and the same settle-detection logic. The duplication is intentional: each target (Python objects, GPU threads, JIT-compiled loops) demands a different code style, but the *physics* is shared by construction.  See [docs/gpu.md](gpu.md) for how `@cuda.jit(device=True)` and `@njit` relate.
 
 ## Tests
 
