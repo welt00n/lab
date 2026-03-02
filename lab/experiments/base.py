@@ -135,11 +135,11 @@ class DropExperiment:
         run_replay(self, heights, angles, results, tilt_axis=tilt_axis)
 
     def save_video(self, heights, angles, results,
-                    tilt_axis="x", output_dir=None):
+                   tilt_axis="x", output_dir=None, fast=False):
         """Save an animated replay as MP4 to *output_dir*."""
         from lab.visualization.dashboard import save_video
         save_video(self, heights, angles, results,
-                   tilt_axis=tilt_axis, output_dir=output_dir)
+                   tilt_axis=tilt_axis, output_dir=output_dir, fast=fast)
 
     @staticmethod
     def default_args():

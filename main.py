@@ -79,6 +79,7 @@ def _save_parameters(output_dir, args, elapsed):
         "axis": args.axis,
         "mode": "gpu" if args.gpu else ("live" if args.live else "batch"),
         "save_video": args.save_video,
+        "video_fast": args.video_fast,
         "elapsed_seconds": round(elapsed, 2),
     }
     (Path(output_dir) / "parameters.json").write_text(
@@ -115,6 +116,7 @@ def welcome():
   --live       Live 3D dashboard
   --gpu        Use CUDA GPU for sweep
   --save-video Save animated replay as MP4
+  --video-fast Faster/lighter video export settings
 
 {BOLD}{YELLOW}  Tests{RESET}
 {DIM}  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{RESET}
@@ -144,6 +146,8 @@ def main():
                         help="live 3D dashboard with animated physics")
     parser.add_argument("--save-video", action="store_true",
                         help="save animated replay as MP4 to results folder")
+    parser.add_argument("--video-fast", action="store_true",
+                        help="use faster/lighter settings for video export")
 
     args = parser.parse_args()
 
@@ -190,7 +194,8 @@ def main():
         if args.save_video:
             exp.save_video(heights, angles, results,
                            tilt_axis=args.axis,
-                           output_dir=str(output_dir))
+                           output_dir=str(output_dir),
+                           fast=args.video_fast)
 
     else:
         mode = "batch"
@@ -213,7 +218,8 @@ def main():
         if args.save_video:
             exp.save_video(heights, angles, results,
                            tilt_axis=args.axis,
-                           output_dir=str(output_dir))
+                           output_dir=str(output_dir),
+                           fast=args.video_fast)
 
 
 if __name__ == "__main__":

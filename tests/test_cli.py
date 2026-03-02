@@ -114,6 +114,7 @@ class TestArgParsing:
         parser.add_argument("--gpu", action="store_true")
         parser.add_argument("--live", action="store_true")
         parser.add_argument("--save-video", action="store_true")
+        parser.add_argument("--video-fast", action="store_true")
         return parser.parse_args(args_list)
 
     def test_coin_recognized(self):
@@ -141,6 +142,7 @@ class TestArgParsing:
         assert not args.gpu
         assert not args.live
         assert not args.save_video
+        assert not args.video_fast
 
     def test_gpu_flag(self):
         args = self._parse(["coin", "--gpu"])
@@ -153,6 +155,10 @@ class TestArgParsing:
     def test_save_video_flag(self):
         args = self._parse(["coin", "--save-video"])
         assert args.save_video
+
+    def test_video_fast_flag(self):
+        args = self._parse(["coin", "--video-fast"])
+        assert args.video_fast
 
     def test_no_experiment_gives_none(self):
         args = self._parse([])

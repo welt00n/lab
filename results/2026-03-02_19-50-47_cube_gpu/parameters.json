@@ -1,0 +1,12 @@
+{
+  "experiment": "cube",
+  "nh": 50,
+  "na": 360,
+  "hmin": 0.1,
+  "hmax": 30.0,
+  "axis": "x",
+  "mode": "gpu",
+  "save_video": true,
+  "video_fast": true,
+  "elapsed_seconds": 5.06
+}

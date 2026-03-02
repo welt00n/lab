@@ -311,6 +311,9 @@ def run_replay(experiment, heights, angles, results, tilt_axis="x"):
     dt_phys = 0.0005
     dt_frame = t_max / n_frames
     phys_steps_per_frame = max(1, int(dt_frame / dt_phys))
+    if fast:
+        print(f"  Fast video mode: {n_frames} frames, reduced DPI, "
+              "subsampled 3D rendering.")
 
     ax_f, ay_f, az_f = _AXIS_MAP[tilt_axis]
     outcome_keys = sorted(experiment.colors.keys())
@@ -615,7 +618,7 @@ def _save_figures(fig, output_dir):
 # ================================================================
 
 def save_video(experiment, heights, angles, results,
-               tilt_axis="x", output_dir=None, fps=30):
+               tilt_axis="x", output_dir=None, fps=30, fast=False):
     """
     Save an animated replay of pre-computed results as an MP4.
 
@@ -637,7 +640,10 @@ def save_video(experiment, heights, angles, results,
 
     settle_times = np.sqrt(2.0 * np.maximum(heights, 0.01) / g) * 6.0
     t_max = float(settle_times[-1])
-    n_frames = max(nh, 200)
+    if fast:
+        n_frames = max(80, min(120, nh * 2))
+    else:
+        n_frames = max(nh, 200)
     time_axis = np.linspace(0, t_max, n_frames)
     dt_phys = 0.0005
     dt_frame = t_max / n_frames
@@ -658,7 +664,7 @@ def save_video(experiment, heights, angles, results,
     )
     ref_mesh = _get_mesh_mpl(experiment.mesh)
 
-    fig = plt.figure(figsize=(18, 8))
+    fig = plt.figure(figsize=(14, 6) if fast else (18, 8))
     gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.2, 0.5],
                           wspace=0.22, left=0.04, right=0.97,
                           top=0.90, bottom=0.08)
@@ -689,10 +695,16 @@ def save_video(experiment, heights, angles, results,
         edgecolors="#aaaaaa", linewidths=0.5)
     ax_scene.add_collection3d(floor_poly)
 
-    edge_lw = 0.3 if N > 50 else 0.4
-    mesh_alpha = 0.75 if N > 100 else 0.85
+    edge_lw = 0.25 if N > 50 else 0.35
+    mesh_alpha = 0.70 if N > 100 else 0.80
+    if fast and N > 4000:
+        mesh_stride = int(np.ceil(N / 4000.0))
+    else:
+        mesh_stride = 1
+    render_idx = np.arange(0, N, mesh_stride, dtype=np.int64)
+    render_pos = {int(k): i for i, k in enumerate(render_idx)}
     mesh_collections = []
-    for k in range(N):
+    for k in render_idx:
         ox, oz = offsets[k]
         faces = _transform_mesh(
             ref_mesh,
@@ -717,10 +729,11 @@ def save_video(experiment, heights, angles, results,
     bars = category_histogram.create(
         outcome_keys, experiment.colors, experiment.labels, ax_hist)
 
-    fig.suptitle(
-        f"{experiment.shape} drop \u2014 {N} simulations "
-        f"({nh}h \u00d7 {na}a)",
-        fontsize=13, fontweight="bold")
+    title = (f"{experiment.shape} drop \u2014 {N} simulations "
+             f"({nh}h \u00d7 {na}a)")
+    if fast and mesh_stride > 1:
+        title += f" \u2014 fast mode ({len(render_idx)} rendered)"
+    fig.suptitle(title, fontsize=13, fontweight="bold")
 
     alive_idx = np.arange(N, dtype=np.int64)
     n_alive_box = [N]
@@ -744,23 +757,24 @@ def save_video(experiment, heights, angles, results,
                 i2, j2 = int(grid_ij[k, 0]), int(grid_ij[k, 1])
                 vid_results[i2, j2] = outcome
 
-            if len(newly) > 0:
+            if len(newly) > 0 and ((not fast) or (frame % 2 == 0)):
                 sweep_grid.update(img, vid_results, experiment.colors)
                 category_histogram.update(bars, vid_results, outcome_keys)
 
-        for k in range(N):
+        for k in render_idx:
             ox, oz = offsets[k]
             faces = _transform_mesh(
                 ref_mesh,
                 ori[k, 0], ori[k, 1], ori[k, 2], ori[k, 3],
                 ox, pos[k, 1], oz)
-            mesh_collections[k].set_verts(faces)
+            ci = render_pos[int(k)]
+            mesh_collections[ci].set_verts(faces)
             if not alive[k]:
                 i2, j2 = int(grid_ij[k, 0]), int(grid_ij[k, 1])
                 val = vid_results[i2, j2]
                 if not np.isnan(val):
                     c = experiment.colors.get(int(val), "#999999")
-                    mesh_collections[k].set_facecolors(c)
+                    mesh_collections[ci].set_facecolors(c)
 
         t = time_axis[min(frame, len(time_axis) - 1)]
         n_al = n_alive_box[0]
@@ -773,7 +787,8 @@ def save_video(experiment, heights, angles, results,
             f"{experiment.shape} outcome map \u2014 "
             f"{settled} / {N} settled")
 
-        if frame % 20 == 0 or frame == n_frames - 1:
+        progress_every = 10 if fast else 20
+        if frame % progress_every == 0 or frame == n_frames - 1:
             print(f"\r  Encoding frame {frame + 1} / {n_frames}",
                   end="", flush=True)
 
@@ -797,10 +812,11 @@ def save_video(experiment, heights, angles, results,
         except ImportError:
             pass
 
+    dpi = 70 if fast else 120
     if has_ffmpeg:
         video_path = out / "simulation.mp4"
         ani.save(str(video_path), writer="ffmpeg", fps=fps,
-                 dpi=120, savefig_kwargs={"facecolor": fig.get_facecolor()})
+                 dpi=dpi, savefig_kwargs={"facecolor": fig.get_facecolor()})
     else:
         video_path = out / "simulation.gif"
         print("\n  ffmpeg not found, saving as GIF instead...")

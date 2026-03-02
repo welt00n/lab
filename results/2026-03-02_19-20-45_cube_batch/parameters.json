@@ -1,0 +1,11 @@
+{
+  "experiment": "cube",
+  "nh": 50,
+  "na": 360,
+  "hmin": 0.1,
+  "hmax": 30.0,
+  "axis": "z",
+  "mode": "batch",
+  "save_video": false,
+  "elapsed_seconds": 8.79
+}
