@@ -17,14 +17,15 @@ physics/
 │   │   ├── integrators.py     Leapfrog (symplectic), RK4, adaptive RK45
 │   │   ├── experiment.py      Experiment runner: setup → run → DataSet
 │   │   ├── dataset.py         Time-indexed trajectory with convenience methods
-│   │   └── quaternion.py      Quaternion math (rotation, exp map, etc.)
+│   │   ├── quaternion.py      Quaternion math (rotation, exp map, etc.)
+│   │   └── rigid_body_jit.py  JIT-compiled rigid-body physics (single source of truth)
 │   │
 │   ├── systems/               Pre-built Hamiltonians
 │   │   ├── oscillators.py     Harmonic, damped, driven, coupled, Duffing
 │   │   ├── pendulums.py       Simple, double, spherical
 │   │   ├── central_force.py   Kepler, general V(r), precessing orbits
 │   │   ├── charged.py         Particle in E, B, E×B fields
-│   │   ├── rigid_body/        3D rigid body engine (subpackage)
+│   │   ├── rigid_body/        3D rigid body engine (OOP subpackage)
 │   │   │   ├── objects.py     PointParticle, RigidBody (cube/coin/rod)
 │   │   │   ├── fields.py      Gravity, electric, Coulomb, drag
 │   │   │   ├── constraints.py Floor constraint with contact impulse
@@ -41,89 +42,156 @@ physics/
 │   │   └── spectral.py        FFT, power spectrum, spectrogram
 │   │
 │   ├── visualization/         Plotting and animation
+│   │   ├── sweep_grid.py      Generic 2D colour-grid (outcome maps)
+│   │   ├── category_histogram.py  Generic discrete bar chart
+│   │   ├── body_scene.py      3D rigid-body renderer (PyVista + mpl fallback)
+│   │   ├── playback_controls.py   Pause/speed/step widgets
+│   │   ├── dashboard.py       Compositor: wires primitives into live/replay/static
 │   │   ├── plots.py           Time series, multi-panel diagnostics
 │   │   ├── animate2d.py       2D animations (all demo types)
 │   │   ├── interactive.py     Matplotlib sliders for parameter exploration
-│   │   ├── field_snapshot.py  FDTD field visualization and ray paths
-│   │   └── pyvista_scene.py   PyVista 3D scene for drop experiments
+│   │   └── field_snapshot.py  FDTD field visualization and ray paths
 │   │
 │   └── experiments/           Experiment modules
-│       ├── coin_toss.py       Coin toss: deterministic chaos demo
-│       ├── drop_experiment.py Parallel rigid-body drop sweeps
-│       ├── drop_gpu.py        GPU-accelerated drop sweeps (CUDA)
-│       └── live_dashboard.py  Real-time 3-panel animation (JIT physics)
+│       ├── base.py            DropExperiment base class (sweep, live, GPU)
+│       ├── coin.py            CoinDrop subclass (declarative config only)
+│       ├── cube.py            CubeDrop subclass (declarative config only)
+│       ├── drop_gpu.py        GPU-accelerated drop sweeps (CUDA kernel)
+│       └── coin_toss.py       Legacy: coin toss OOP experiment
 │
 ├── tests/                     Unit and integration tests
-├── experiments/               Runnable experiment scripts
+├── experiments/               Runnable experiment scripts (legacy redirects)
 │   ├── coin_toss.ipynb        Coin toss interactive notebook
-│   ├── drop_coin.py           Coin drop outcome map (height × tilt)
-│   └── drop_cube.py           Cube drop outcome map (height × tilt)
+│   ├── drop_coin.py           Redirects to: python main.py coin
+│   └── drop_cube.py           Redirects to: python main.py cube
+├── results/                   Auto-saved experiment outputs (date-stamped)
 ├── docs/                      Documentation
-├── main.py                    CLI demo launcher
-├── completions.bash           Bash tab-completion for demos
-└── requirements.txt           numpy, matplotlib, pytest
+├── main.py                    Experiment launcher (CLI entry point)
+├── completions.bash           Bash tab-completion
+├── requirements.txt           Dependencies (numpy, matplotlib, numba, CUDA, etc.)
+└── Makefile                   Build targets (make help for list)
 ```
 
-## Three implementations of the same physics
+## Experiment-driven architecture
 
-The rigid-body contact physics exists in three parallel implementations. Each targets a different execution environment while computing identical physics:
+The rigid-body drop experiments use a clean three-layer architecture:
 
-| Aspect | Python OOP | Numba JIT | CUDA |
-|--------|-----------|-----------|------|
-| **File** | `lab/systems/rigid_body/` | `lab/experiments/live_dashboard.py` | `lab/experiments/drop_gpu.py` |
-| **Data model** | `RigidBody` objects with numpy arrays | Flat scalar arguments to `@njit` functions | Scalar arguments to `@cuda.jit(device=True)` functions |
-| **Loop structure** | `World.step()` iterates bodies | `_step_all()` loops over `alive_idx` array | One kernel thread per simulation |
-| **Memory** | Python heap (GC-managed) | Stack-allocated scalars (Numba unboxes everything) | GPU registers + global memory for result arrays |
-| **Quaternion ops** | `lab/core/quaternion.py` (numpy) | Inline scalar math (JIT-compiled) | `@cuda.jit(device=True)` scalar functions |
-| **Use case** | Single simulations, education, prototyping | Live dashboard, moderate-scale sweeps | Massive parameter sweeps (10K+ simulations) |
+### Layer 1: Physics core (`lab/core/rigid_body_jit.py`)
 
-### Why three?
+**Single source of truth** for all rigid-body physics. Contains:
+- Physical constants (coin, cube, rod dimensions and masses)
+- `@njit` quaternion math (normalize, multiply, rotate, exp map)
+- Lowest-point calculation per shape
+- Floor constraint with normal impulse, friction, and rolling resistance
+- `step_bodies()` — batch stepper that advances N bodies by M steps
+- `classify()` — determines which face landed down
 
-Numba's `@njit` cannot call methods on Python objects, so the OOP interface (`World`, `RigidBody`, `FloorConstraint`) cannot be JIT-compiled. The JIT path rewrites the same physics as flat scalar functions that Numba can compile to native code. The CUDA path does the same for GPU threads, with the additional constraint that device functions cannot allocate memory or call Python.
+Every execution mode (batch CPU, live, GPU) calls these same functions. The CUDA path (`drop_gpu.py`) cannot call `@njit` functions directly (Numba limitation) but imports all constants from here.
 
-### Consistency testing
+### Layer 2: Experiments (`lab/experiments/`)
 
-The three implementations MUST produce identical results for the same initial conditions (up to chaos-limited divergence). The test suite (`tests/test_drop_gpu.py`) verifies CPU-GPU parity: for a set of test cases, the GPU and CPU outcomes must agree for at least 40% of grid points. The 40% threshold accounts for genuine sensitivity to floating-point non-associativity at chaotic basin boundaries.
+The `DropExperiment` base class defines the experiment protocol:
 
-### Constants synchronisation
+```python
+class DropExperiment:
+    # Subclass provides declarative config:
+    shape: str              # "coin" or "cube"
+    shape_id: int           # 0 or 1
+    angle_range: tuple      # (0, π) or (0, 2π)
+    colors: dict            # outcome_id → hex colour
+    labels: dict            # outcome_id → display label
+    settle_height: float
+    body_color: str
+    mesh: str               # "coin" or "cube"
 
-Physical constants (COIN_RADIUS, COIN_MASS, etc.) are duplicated across all three paths:
-- OOP: function arguments with defaults in `lab/systems/rigid_body/experiment.py`
-- JIT: module-level constants in `lab/experiments/live_dashboard.py` (captured at compile time)
-- CUDA: module-level constants in `lab/experiments/drop_gpu.py` (captured at compile time)
-
-Numba JIT captures globals at compile time — changing a constant after the first call has no effect until the cache is cleared. CUDA device functions capture closure variables similarly. Any parameter change must be made in ALL THREE locations and the Numba cache must be cleared (`__pycache__` deletion).
-
-## Live dashboard architecture
-
-The live dashboard (`lab/experiments/live_dashboard.py`) is the most architecturally interesting execution path because it interleaves physics computation with real-time visualization.
-
-### Single-thread design
-
-All physics and rendering run on the main thread inside a `matplotlib.animation.FuncAnimation` callback. This avoids the complexity of multi-threaded state synchronisation and the GIL bottleneck.
-
-### The update loop
-
-Each animation frame:
-1. Computes `steps_per_frame` physics steps (adaptive: fewer alive bodies → more steps per frame)
-2. Classifies newly settled bodies
-3. Updates the PyVista 3D scene (`DropScene.update_all`, `DropScene.render`)
-4. Updates the matplotlib 2D panels (outcome map, histogram)
-5. Updates the title with settled/falling counts
-
-### Adaptive stepping
-
-The `steps_per_frame` count scales inversely with the number of alive bodies:
-
-```
-steps_per_frame = base_steps * (N / max(n_alive, 1))
+    # Base class implements:
+    def build_grid(nh, na, hmin, hmax)
+    def sweep(heights, angles, ...)      # batch CPU
+    def sweep_gpu(heights, angles, ...)  # GPU CUDA
+    def run_live(heights, angles, ...)   # live dashboard
+    def show_results(heights, angles, results)
 ```
 
-When most bodies have settled, the few remaining ones advance rapidly. This keeps the total frame time roughly constant.
+`CoinDrop` and `CubeDrop` are thin subclasses that set attributes only — no methods. Adding a new experiment means defining one more subclass.
 
-### Pause and speed controls
+### Layer 3: Visualization primitives (`lab/visualization/`)
 
-The dashboard provides pause/resume and speed multiplier buttons. The speed multiplier scales the number of physics steps per frame, not the timestep itself — `dt` remains fixed at 0.0005 s to preserve numerical stability.
+Generic, reusable components that know nothing about coins or cubes:
+
+| Primitive | What it does | Used for |
+|-----------|-------------|----------|
+| `SweepGrid` | 2D colour grid (`imshow`) | Outcome maps |
+| `CategoryHistogram` | Discrete bar chart | Outcome distribution |
+| `BodyScene` | 3D polygon renderer (PyVista or matplotlib) | Watching bodies fall |
+| `PlaybackControls` | Pause/speed/step buttons | Animation control |
+| `dashboard.py` | Compositor — wires primitives + physics | All visualization modes |
+
+The dashboard has three modes:
+- **`run_live()`**: physics + 3D scene + outcome map + histogram, all updating per frame
+- **`show_results()`**: static view after batch/GPU sweep
+- **`run_replay()`**: animated replay with time slider
+
+## "GPU" means two different things
+
+**GPU Compute (CUDA)** — Numba `@cuda.jit` runs N physics simulations in parallel on NVIDIA GPU cores. Used by `drop_gpu.py`. This is about raw throughput. Input: arrays of heights/angles. Output: integer result grid.
+
+**GPU Rendering (OpenGL)** — PyVista/VTK renders a 3D scene with hardware-accelerated polygon rendering. Used by `body_scene.py`. This is about displaying 3D objects smoothly. Input: positions/orientations per frame. Output: pixels on screen.
+
+These are independent. You can have GPU rendering with CPU physics (live mode), or GPU compute with no rendering (batch `--gpu`).
+
+## Execution flows
+
+### Batch CPU (`python main.py coin`)
+
+```
+main.py → CoinDrop.sweep() → rigid_body_jit.step_bodies() → classify()
+    → dashboard.show_results() → SweepGrid + CategoryHistogram
+    → auto-save to results/YYYY-MM-DD_HH-MM-SS_coin_batch/
+```
+
+### Batch GPU (`python main.py coin --gpu`)
+
+```
+main.py → CoinDrop.sweep_gpu() → drop_gpu.sweep_drop_gpu() [CUDA kernel]
+    → dashboard.show_results() → SweepGrid + CategoryHistogram
+    → auto-save to results/YYYY-MM-DD_HH-MM-SS_coin_gpu/
+```
+
+### Live dashboard (`python main.py coin --live`)
+
+```
+main.py → CoinDrop.run_live() → dashboard.run_live()
+    → FuncAnimation loop:
+        rigid_body_jit.step_bodies() per frame
+        BodyScene.update_all() [OpenGL GPU or matplotlib CPU]
+        SweepGrid.update() + CategoryHistogram.update()
+```
+
+## Auto-saving results
+
+Every batch and GPU run saves output to a dated folder:
+
+```
+results/
+  2026-03-02_14-35-12_coin_batch/
+    outcome_map.png
+    parameters.json        # nh, na, hmin, hmax, axis, mode, elapsed_time
+  2026-03-02_15-01-44_cube_gpu/
+    outcome_map.png
+    parameters.json
+```
+
+## Constants synchronisation
+
+Physical constants live in ONE place: `lab/core/rigid_body_jit.py`. The GPU module imports them:
+
+```python
+# In drop_gpu.py:
+from lab.core.rigid_body_jit import COIN_RADIUS, COIN_MASS, ...
+_COIN_R = COIN_RADIUS  # aliased for CUDA device function closure
+```
+
+CUDA device functions capture these at compile time. Changing a constant in `rigid_body_jit.py` propagates to GPU after clearing `__pycache__`.
 
 ## Data flow
 
@@ -144,11 +212,7 @@ flowchart LR
 | **Systems** | physics of one system | integrators, visualization |
 | **Analysis** | DataSet structure | which system produced it |
 | **Visualization** | matplotlib, DataSet | physics details |
-
-This means you can:
-- Add a new system without touching any analysis or visualization code
-- Swap integrators without changing any system
-- Plot any system's results with the same functions
+| **Experiments** | their own config (colors, labels) | chart drawing, physics internals |
 
 ## The Hamiltonian interface
 
@@ -176,125 +240,15 @@ Gradients are computed automatically via central finite differences unless you p
 
 **Default: leapfrog.** For separable Hamiltonian systems ($H = T(p) + V(q)$), the leapfrog integrator preserves the symplectic structure of phase space, keeping energy bounded rather than drifting. For non-separable systems (where $T$ depends on both $q$ and $p$), RK4 gives better per-step accuracy.
 
-## Visualization dispatch
-
-The `animate()` function in `animate2d.py` reads the Hamiltonian's `vis_hint` and dispatches to the right animator:
-
-| `vis_hint["type"]` | Animator | Systems |
-|---|---|---|
-| `spring` | Spring-mass + time trace | Harmonic oscillator |
-| `coupled_spring` | Two masses + springs | Coupled oscillators |
-| `pendulum` | Swinging rod with trail | Simple pendulum |
-| `double_pendulum` | Two-link chain with trail | Double pendulum |
-| `orbit` | Polar → Cartesian trace | Kepler, central force |
-| `particle_3d` | Top-down x-y trace | Cyclotron, E-field |
-| `rigid_drop` | Side-view rotating body | Cube, coin, rod drops |
-
-EM waves and ray optics use dedicated visualizers in `field_snapshot.py`.
-
-## Special cases
-
-### Rigid bodies
-
-Rigid body dynamics (3D position + quaternion orientation + angular momentum) don't map to scalar $(q, p)$ arrays. The `rigid_body` subpackage provides its own `World` integrator (3D leapfrog with quaternion rotation) and a `RigidBodyExperiment` that outputs a standard `DataSet` with $q = [x, y, z, q_w, q_x, q_y, q_z]$, so all analysis and visualization tools still work.
-
-### FDTD electromagnetic waves
-
-The FDTD solver operates on field grids rather than particles. It has its own `FDTDGrid1D`/`FDTDGrid2D` classes and returns an `FDTDDataSet`. The visualization module `field_snapshot` handles these natively. Conceptually, FDTD is still a leapfrog scheme — E and B fields are staggered in time, exactly like position and momentum.
-
-### Ray optics
-
-Geometric optics fits the Hamiltonian framework directly: $H = |p| / n(q)$. Light rays are just particles whose "potential" comes from the refractive index field. Uses the standard `Experiment` runner and `DataSet`.
-
-## Software design principles
-
-### Framework vs library
-
-A library is code *you* call; a framework calls *you* (inversion of control, a.k.a. the "Hollywood Principle": *don't call us, we'll call you*). Our `Experiment` class is the framework entry point — you supply $H$, initial conditions, and a time step; it controls execution, calling the integrator, collecting the trajectory, and returning a `DataSet`. The rigid-body `World` class works the same way: you register fields and constraints, it orchestrates the physics loop. User code never manually advances time or resolves collisions.
-
-### Plugin architecture
-
-Fields, constraints, and environments are **plugins**. You register them with `World`; the framework orchestrates their interaction each time step. This follows the **open/closed principle**: the system is *open for extension* (add a new field class, a new constraint, a new environment preset) and *closed for modification* (you never need to edit `World` to support a new force law). The same pattern applies at the top level — adding a new `Hamiltonian` subclass extends the library without touching the core.
-
-### Separation of concerns (formal)
-
-The **Single Responsibility Principle** is the guiding rule:
-
-- The **Hamiltonian** knows physics (energy, forces).
-- The **Integrator** knows numerics (time stepping, error control).
-- The **Visualizer** knows matplotlib (axes, animation frames).
-
-None of these layers knows about the others' internals. This is why we can add a GPU backend without changing physics code: the GPU module reimplements the *integrator* loop in CUDA while the Hamiltonian definitions and visualization stay untouched.
-
-## Demos
-
-Run `python main.py` for the full list. Each demo creates a system, runs a simulation, and shows an animated matplotlib window:
+## Usage
 
 ```
-python main.py oscillator    spring-mass animation
-python main.py coupled       two coupled oscillators
-python main.py pendulum      swinging pendulum
-python main.py double        double pendulum (chaos)
-python main.py kepler        Kepler orbit tracing
-python main.py cyclotron     charged particle in B field
-python main.py drop [shape]  rigid body drop (cube/coin/rod)
-python main.py emwave        EM pulse through a dielectric
-python main.py rays          light rays through a lens
+python main.py coin                    # CPU batch sweep
+python main.py coin --gpu              # GPU (CUDA) sweep
+python main.py coin --live             # live dashboard
+python main.py cube --nh 20 --na 30    # custom grid size
+python main.py                         # show help
 ```
-
-## Experiments
-
-Standalone scripts in `experiments/` run larger parameter sweeps, using CPU multiprocessing for parallel execution:
-
-```
-python experiments/drop_coin.py              # coin: 40×60 grid, all CPUs
-python experiments/drop_cube.py --nh 60 --na 90   # cube: finer grid
-python experiments/drop_coin.py --gpu          # GPU (CUDA)
-python experiments/drop_coin.py --live         # live animation
-```
-
-Each prints real-time progress (percentage, elapsed time, ETA) and shows a color-coded outcome map at the end.
-
-### Live dashboard (`--live`)
-
-The `--live` flag opens a three-panel animation where **all grid points drop simultaneously** in a 3D scatter view, and the outcome map and histogram fill in real time as objects settle:
-
-```
-python experiments/drop_coin.py --live              # CPU JIT
-python experiments/drop_coin.py --live --nh 10 --na 15   # smaller grid, smoother
-```
-
-This mode runs the physics on the **main thread** inside `FuncAnimation.update()` — there are no background workers, no queues, and no deadlocks. The architecture is:
-
-```mermaid
-flowchart LR
-    INIT["Initialise N state arrays<br/>(pos, mom, ori, amom)"]
-    INIT --> WARM["JIT warm-up<br/>(compile _step_all)"]
-    WARM --> ANIM["FuncAnimation loop"]
-    ANIM --> STEP["_step_all<br/>(numba @njit)"]
-    STEP --> RENDER["scatter3D update<br/>+ outcome map"]
-    RENDER --> ANIM
-```
-
-| Component | Technology | Why |
-|---|---|---|
-| Physics stepper | `numba @njit(cache=True)` | ~1 ms per frame for 2400 bodies; 100–1000× faster than Python `World` objects |
-| 3D rendering | `ax.scatter()` | One draw call for all N objects; updating `_offsets3d` is O(N) |
-| Outcome map | `imshow` with live `set_data` | Standard matplotlib, updates only when new objects settle |
-| Threading | None | Eliminates deadlocks, queue blocking, and GIL contention |
-
-The JIT physics module (`lab/experiments/live_dashboard.py`) reimplements the same leapfrog + floor-constraint physics as the CPU `World` and the GPU kernel, but as flat `@njit` scalar functions. Compiled code is cached to disk; first run compiles in ~2 s, subsequent runs start instantly.
-
-## GPU acceleration
-
-The drop experiments support dual execution paths: **CPU** (multiprocessing, the default) and **GPU** (CUDA via CuPy). Both paths produce identical `DataSet` results — the physics code (`Hamiltonian`, `World`, fields, constraints) is shared; only the parallel-sweep loop differs:
-
-| Path | Backend | Parallelism | Flag |
-|------|---------|-------------|------|
-| CPU | numpy + multiprocessing | one simulation per core | *(default)* |
-| GPU | CuPy (CUDA) | thousands of simulations as a single batched kernel | `--gpu` |
-
-The GPU path lives in `lab/experiments/drop_gpu.py` and is a drop-in replacement for the CPU sweep — same inputs, same outputs, ~10–50× faster on large grids. See [docs/gpu.md](gpu.md) for hardware requirements, installation, benchmarks, and implementation details.
 
 ## Tests
 

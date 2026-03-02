@@ -38,7 +38,7 @@ graph LR
     end
 ```
 
-Our parameter sweep in `lab/experiments/drop_experiment.py` runs thousands of independent
+Our parameter sweep in `lab/experiments/base.py` runs thousands of independent
 rigid-body simulations. On a single core at 4 GHz, a 40x60 grid takes minutes. Spread
 across 8 CPU cores it completes in roughly one-eighth the time. On a GPU with thousands
 of threads it finishes orders of magnitude faster. The physics is identical — only the
@@ -76,8 +76,8 @@ The practical consequence: **for CPU-bound scientific workloads in Python, you m
 processes, not threads.** Each process has its own interpreter and its own GIL, so $N$
 processes genuinely execute on $N$ cores.
 
-This is exactly what our drop experiment does. In `lab/experiments/drop_experiment.py`,
-the `sweep_drop` function distributes simulations across a `ProcessPoolExecutor`:
+This is exactly what our drop experiment does. In `lab/experiments/base.py`,
+the `DropExperiment.sweep()` method distributes simulations across a `ProcessPoolExecutor`:
 
 ```python
 with ProcessPoolExecutor(max_workers=workers) as executor:
@@ -87,16 +87,16 @@ with ProcessPoolExecutor(max_workers=workers) as executor:
 ```
 
 Each worker process receives a serialised (pickled) tuple of parameters, runs
-`drop_body()` independently, and returns the integer outcome. The main process collects
+the batch stepper in `lab/core/rigid_body_jit.py` for its (h, θ) pair, and returns the integer outcome. The main process collects
 results as futures complete. There is no shared mutable state — the isolation of
 processes eliminates race conditions entirely.
 
 ```mermaid
 flowchart TD
     MAIN["Main process\n(builds job list, collects results)"]
-    MAIN -->|pickle args| W1["Worker 1\ndrop_body(h₁, θ₁)"]
-    MAIN -->|pickle args| W2["Worker 2\ndrop_body(h₂, θ₂)"]
-    MAIN -->|pickle args| W3["Worker 3\ndrop_body(h₃, θ₃)"]
+    MAIN -->|pickle args| W1["Worker 1\nbatch stepper (h₁, θ₁)"]
+    MAIN -->|pickle args| W2["Worker 2\nbatch stepper (h₂, θ₂)"]
+    MAIN -->|pickle args| W3["Worker 3\nbatch stepper (h₃, θ₃)"]
     MAIN -->|pickle args| WN["Worker N\n..."]
     W1 -->|return result| MAIN
     W2 -->|return result| MAIN
@@ -338,7 +338,7 @@ single integer result. This is an almost ideal memory access pattern for a GPU.
 
 ## CPU multiprocessing vs GPU
 
-Both `sweep_drop` (CPU) and `sweep_drop_gpu` (GPU) solve the same problem: run the full
+Both `DropExperiment.sweep()` (CPU) and `sweep_drop_gpu` (GPU) solve the same problem: run the full
 $(h, \theta)$ grid and classify the outcome of each simulation. They differ in execution
 model, overhead structure, and performance characteristics.
 
@@ -402,7 +402,7 @@ GPU finishes in ~4 s while the CPU requires ~12 minutes.
 
 ### Architecture decision in this codebase
 
-The CPU implementation in `lab/experiments/drop_experiment.py` uses Python objects
+The CPU implementation in `lab/experiments/base.py` uses Python objects
 (`RigidBody`, `World`, `FloorConstraint`) with clean abstractions and readable code. The
 GPU implementation in `lab/experiments/drop_gpu.py` reimplements the same physics as
 flat numeric CUDA device functions — no objects, no dynamic allocation, no Python
@@ -410,7 +410,7 @@ overhead. This duplication is intentional: the CPU version prioritises clarity a
 correctness (and serves as the reference implementation for testing), while the GPU
 version prioritises raw throughput.
 
-The host-side interface `sweep_drop_gpu` mirrors `sweep_drop` exactly — same parameter
+The host-side interface `sweep_drop_gpu` mirrors `DropExperiment.sweep()` exactly — same parameter
 names, same return type — so calling code can switch between CPU and GPU with a single
 flag:
 
@@ -418,7 +418,7 @@ flag:
 if args.gpu:
     results = sweep_drop_gpu(shape, heights, angles, tilt_axis=args.axis)
 else:
-    results = sweep_drop(shape, heights, angles, tilt_axis=args.axis, workers=workers)
+    results = DropExperiment.sweep(shape, heights, angles, tilt_axis=args.axis, workers=workers)
 ```
 
 This pattern — a clean, object-oriented reference implementation alongside an optimised
@@ -460,7 +460,7 @@ scatter plot, and return.  The animation framework handles the GUI event loop.
 │  Main thread                                │
 │                                             │
 │  FuncAnimation.update()                     │
-│    ├── _step_all(...)     # JIT physics     │
+│    ├── step_bodies(...)   # JIT physics     │
 │    ├── classify settled   # outcome map     │
 │    ├── scatter update     # 3D positions    │
 │    └── return artists     # blit            │
@@ -529,4 +529,4 @@ invocation recompiles from scratch.
 - Kirk & Hwu, *Programming Massively Parallel Processors* — GPU computing from first
   principles, with CUDA examples.
 - Python `concurrent.futures` documentation — the standard library module used in
-  `drop_experiment.py`.
+  `lab/experiments/base.py`.

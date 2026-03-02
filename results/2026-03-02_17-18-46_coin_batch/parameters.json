@@ -1,0 +1,11 @@
+{
+  "experiment": "coin",
+  "nh": 5,
+  "na": 8,
+  "hmin": 0.1,
+  "hmax": 5.0,
+  "axis": "x",
+  "mode": "batch",
+  "save_video": true,
+  "elapsed_seconds": 0.12
+}

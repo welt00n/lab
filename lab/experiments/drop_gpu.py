@@ -23,6 +23,13 @@ from pathlib import Path
 
 import numpy as np
 
+from lab.core.rigid_body_jit import (
+    COIN_RADIUS, COIN_HALF_THICK, COIN_MASS,
+    CUBE_HALF_SIDE, CUBE_MASS,
+    ROD_HALF_LEN, ROD_RAD, ROD_MASS,
+    COIN, CUBE, ROD,
+)
+
 
 # ------------------------------------------------------------------
 # Auto-configure CUDA library paths from pip-installed packages
@@ -52,8 +59,8 @@ def _setup_cuda_env():
     except ImportError:
         return
 
-    nvcc_root = str(Path(_nvcc.__file__).resolve().parent)
-    rt_root = str(Path(_rt.__file__).resolve().parent)
+    nvcc_root = str(Path(list(_nvcc.__path__)[0]).resolve())
+    rt_root = str(Path(list(_rt.__path__)[0]).resolve())
 
     nvvm_lib = os.path.join(nvcc_root, "nvvm", "lib64")
     cudart_lib = os.path.join(rt_root, "lib")
@@ -148,12 +155,12 @@ else:
 
 
 # ------------------------------------------------------------------
-# Shape IDs
+# Shape IDs (imported from rigid_body_jit, aliased for local use)
 # ------------------------------------------------------------------
 
-SHAPE_COIN = 0
-SHAPE_CUBE = 1
-SHAPE_ROD = 2
+SHAPE_COIN = COIN
+SHAPE_CUBE = CUBE
+SHAPE_ROD = ROD
 
 _SHAPE_NAME_TO_ID = {"coin": SHAPE_COIN, "cube": SHAPE_CUBE, "rod": SHAPE_ROD}
 
@@ -243,19 +250,16 @@ if HAS_CUDA:
                     1.0 - 2.0*(qx*qx + qy*qy))
 
     # ---------------------------------------------------------------
-    # Realistic body shape parameters (SI units)
+    # Constants from rigid_body_jit (single source of truth)
     # ---------------------------------------------------------------
-    # Coin: US quarter — radius 12.13 mm, thickness 1.75 mm, mass 5.67 g
-    # Cube: casino die — side 16 mm, mass 8 g
-    # Rod:  1 m, mass 1 kg (legacy)
-    _COIN_R = 0.01213
-    _COIN_HT = 0.000875
-    _COIN_M = 0.00567
-    _CUBE_HS = 0.008
-    _CUBE_M = 0.008
-    _ROD_HL = 0.5
-    _ROD_R = 0.02
-    _ROD_M = 1.0
+    _COIN_R = COIN_RADIUS
+    _COIN_HT = COIN_HALF_THICK
+    _COIN_M = COIN_MASS
+    _CUBE_HS = CUBE_HALF_SIDE
+    _CUBE_M = CUBE_MASS
+    _ROD_HL = ROD_HALF_LEN
+    _ROD_R = ROD_RAD
+    _ROD_M = ROD_MASS
 
     @cuda.jit(device=True)
     def get_mass(shape_id):

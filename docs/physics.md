@@ -11,6 +11,9 @@ $$
 $$
 
 That's it. Two equations. They apply to *every* classical system, regardless of how many particles, dimensions, or forces are involved.
+$$
+\frac{dH}{dt} = \frac{\partial H}{\partial q}\dot{q} + \frac{\partial H}{\partial p}\dot{p} = \frac{\partial H}{\partial q}\frac{\partial H}{\partial p} - \frac{\partial H}{\partial p}\frac{\partial H}{\partial q} = 0
+$$
 
 ## What are $q$ and $p$?
 
@@ -88,10 +91,30 @@ $$
 
 Energy is *exactly* conserved. This isn't an approximation — it's a mathematical identity. Numerically, we use a **symplectic integrator** (leapfrog) that preserves this structure, so energy stays bounded even over millions of time steps rather than drifting.
 
+Here, "drift" means a spurious, long‑term change in the computed value of the Hamiltonian that does not occur in the true conservative dynamics. Non‑symplectic integrators (for example explicit Euler or many Runge–Kutta schemes) often produce secular drift: energy slowly grows or decays over many steps and trajectories spiral away from the true $H$‑contours (artificial heating or cooling). Symplectic integrators instead preserve the symplectic form and conserve a nearby "modified Hamiltonian": numerical energy typically oscillates with a small, bounded amplitude (controlled by the timestep) rather than showing unbounded secular drift. Caveats: genuine physical dissipation or explicit time dependence of $H$ causes true energy change; floating‑point roundoff can still accumulate over extremely long runs; reducing the timestep lowers the oscillation amplitude.
+
+
 ## Phase space and Liouville's theorem
 
 The state $(q, p)$ evolves as a flow in phase space. Liouville's theorem says this flow is **incompressible**: volumes in phase space are preserved. This is why symplectic integrators are the right tool — they respect this geometric structure by construction.
 
+The variables $(q, p)$ live in **phase space**, which has a built-in geometric structure called the **symplectic form**. This structure is what Liouville's theorem expresses, and it's what symplectic integrators preserve.
+
+A slightly deeper look: the symplectic form is the closed, nondegenerate 2-form
+$$
+\omega = \sum_{i=1}^n dq_i \wedge dp_i,
+$$
+which defines an oriented area element on each conjugate $(q_i,p_i)$ plane. The Hamiltonian vector field $X_H$ satisfies
+$$
+\iota_{X_H}\omega = dH
+$$
+and hence preserves the form: $\mathcal{L}_{X_H}\omega=0$, equivalently the flow $\phi_t$ obeys $\phi_t^*\omega=\omega$. This is the geometric content of Liouville's theorem: phase‑space volumes are preserved (the flow is divergence‑free and has Jacobian determinant one).
+
+When a numerical integrator is symplectic its discrete time‑step map $\Phi_h$ exactly preserves $\omega$ (i.e. $\Phi_h^*\omega=\omega$). Such maps therefore preserve area/volume and the qualitative phase‑space geometry (invariant tori, fixed points, separatrices), which is why they reproduce long‑time behaviour better than non‑symplectic methods.
+
+Backward‑error analysis gives a precise explanation: a symplectic integrator with step size $h$ can be seen as exactly integrating the flow of a nearby Hamiltonian $\tilde H = H + h^k H_k + \cdots$. As a result the numerical energy oscillates around the true energy with a small, bounded amplitude (controlled by $h$ and the method order) rather than showing secular drift. By contrast, non‑symplectic methods typically fail to preserve $\omega$ and introduce spurious dissipation or growth of invariants over long times.
+
+Practical caveats: finite‑precision round‑off can still accumulate on very long runs, and physical non‑conservative forces (or operator‑split dissipative corrections) change energy for real reasons — symplectic structure only protects the conservative part.
 For 1-DOF systems, you can visualize the entire dynamics as contour lines of $H$ in the $(q, p)$ plane. Each contour is a possible trajectory. The topology of these contours reveals everything: stable equilibria (elliptic fixed points), unstable equilibria (hyperbolic fixed points), separatrices (boundaries between qualitatively different motions), and chaos (when contours dissolve into a tangle for systems with 2+ DOF).
 
 ## Units convention
@@ -363,7 +386,7 @@ $$
 \frac{d\hat{f}}{dt} = \frac{1}{i\hbar}[\hat{f}, \hat{H}]
 $$
 
-The entire algebraic structure of classical mechanics survives intact in quantum mechanics — with Poisson brackets promoted to commutators. This is why learning Hamiltonian mechanics now pays off enormously when you reach quantum mechanics: the formalism is already in your hands, and quantization is a *translation*, not a revolution.
+The entire algebraic structure of classical mechanics survives intact in quantum mechanics — with Poisson brackets promoted to commutators. This is why learning Hamiltonian mechanics pays off enormously when you reach quantum mechanics: the formalism is already in your hands, and quantization is a *translation*, not a revolution.
 
 ### Example: angular momentum algebra
 
@@ -434,7 +457,7 @@ The progression from integrable to chaotic is one of the richest subjects in phy
 Hamiltonian mechanics conserves energy by construction. Real rigid bodies
 that bounce off floors do not. The floor constraint in
 `lab/systems/rigid_body/constraints.py` and its JIT counterpart in
-`lab/experiments/live_dashboard.py` introduce dissipation through a
+`lab/core/rigid_body_jit.py` introduce dissipation through a
 sequence of physically motivated impulse models.
 
 ### The contact impulse model

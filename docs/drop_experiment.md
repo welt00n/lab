@@ -116,7 +116,7 @@ the simulations are parallelised and displayed.
 
 ### CPU batch (`ProcessPoolExecutor`)
 
-**Module:** `lab/experiments/drop_experiment.py::sweep_drop`
+**Module:** `lab/experiments/base.py::DropExperiment.sweep`
 
 Each $(h, \theta)$ pair runs as an independent Python process using
 the full OOP physics stack: `World` + `RigidBody` + `GravityField` +
@@ -132,8 +132,8 @@ the full OOP physics stack: `World` + `RigidBody` + `GravityField` +
 **Invocation:**
 
 ```bash
-python experiments/drop_coin.py --nh 20 --na 30
-python experiments/drop_cube.py --nh 20 --na 30 --workers 8
+python main.py coin --nh 20 --na 30
+python main.py cube --nh 20 --na 30 --workers 8
 ```
 
 ### GPU (CUDA kernel)
@@ -159,23 +159,23 @@ simultaneously on the GPU.
 **Invocation:**
 
 ```bash
-python experiments/drop_coin.py --gpu --nh 100 --na 200
-python experiments/drop_cube.py --gpu --nh 200 --na 300
+python main.py coin --gpu --nh 100 --na 200
+python main.py cube --gpu --nh 200 --na 300
 ```
 
 ### Live dashboard (`FuncAnimation` + JIT)
 
-**Module:** `lab/experiments/live_dashboard.py::run_live_dashboard`
+**Module:** `lab/visualization/dashboard.py::run_live_dashboard`
 
 All $N$ bodies are simulated simultaneously in a single
-Numba-compiled function `_step_all`, which runs on the CPU but at
+Numba-compiled function `step_bodies`, which runs on the CPU but at
 near-C speed.  No `ProcessPoolExecutor`, no CUDA --- everything
 executes on the main thread.
 
 - **Physics:** Numba `@njit` scalar functions implementing the same
   leapfrog + floor constraint math as the GPU kernel.
 - **Visualization (PyVista path):** A dedicated
-  `lab/visualization/pyvista_scene.py::DropScene` window renders
+  `lab/visualization/body_scene.py::BodyScene` window renders
   all $N$ bodies as VTK actors on a GPU-accelerated OpenGL floor.
   A separate matplotlib window shows the 2D outcome map and histogram.
 - **Visualization (fallback):** When PyVista is not installed, a
@@ -190,27 +190,27 @@ executes on the main thread.
 **Invocation:**
 
 ```bash
-python experiments/drop_coin.py --live --nh 8 --na 12
-python experiments/drop_cube.py --live --nh 10 --na 15
+python main.py coin --live --nh 8 --na 12
+python main.py cube --live --nh 10 --na 15
 ```
 
 ### Flowchart: CLI to result
 
 ```mermaid
 flowchart TD
-    CLI["python experiments/drop_{coin,cube}.py"]
+    CLI["python main.py {coin,cube}"]
     CLI -->|"--live"| LIVE["run_live_dashboard()"]
     CLI -->|"--gpu"| GPU["sweep_drop_gpu()"]
-    CLI -->|default| CPU["sweep_drop()"]
+    CLI -->|default| CPU["DropExperiment.sweep()"]
 
-    LIVE --> JIT["_step_all  (Numba @njit)\nAll N bodies, main thread"]
-    JIT --> CLASSIFY_JIT["_classify_jit()"]
+    LIVE --> JIT["step_bodies  (Numba @njit)\nAll N bodies, main thread"]
+    JIT --> CLASSIFY_JIT["classify()"]
     CLASSIFY_JIT --> VIS_LIVE["PyVista 3D + matplotlib 2D\nFuncAnimation @ 30 fps"]
 
     GPU --> KERNEL["drop_kernel<<<blocks, threads>>>\nOne CUDA thread per (h, theta)"]
     KERNEL --> CLASSIFY_GPU["classify_dev()  (device)"]
     CLASSIFY_GPU --> RESULT_GPU["results  (nh x na int32)"]
-    RESULT_GPU --> VIEWER["animate_drop_results()"]
+    RESULT_GPU --> VIEWER["lab/visualization/dashboard.run_replay()"]
 
     CPU --> POOL["ProcessPoolExecutor\nos.cpu_count() workers"]
     POOL --> WORKER["_worker()\nWorld + RigidBody + FloorConstraint"]
@@ -249,8 +249,8 @@ The world-$y$ component (vertical) determines the outcome:
 The $\pm 0.1$ dead zone prevents misclassification when the coin
 rests nearly vertical.
 
-**CPU:** `classify_coin(orientation)` in `drop_experiment.py`.
-**JIT:** `_classify_jit(0, qw, qx, qy, qz)` in `live_dashboard.py`.
+**CPU:** `classify_coin(orientation)` in `base.py`.
+**JIT:** `classify(0, qw, qx, qy, qz)` in `lab/core/rigid_body_jit.py`.
 **GPU:** `classify_coin_dev(qw, qx, qy, qz)` in `drop_gpu.py`.
 
 ### Cube
@@ -279,8 +279,8 @@ The face whose axis has the **most negative** world-$y$ component
 points most downward and is the resting face.  The return value is a
 face index 0--5 corresponding to $+x, -x, +y, -y, +z, -z$.
 
-**CPU:** `classify_cube_face(orientation)` in `drop_experiment.py`.
-**JIT:** `_classify_jit(1, qw, qx, qy, qz)` in `live_dashboard.py`.
+**CPU:** `classify_cube_face(orientation)` in `base.py`.
+**JIT:** `classify(1, qw, qx, qy, qz)` in `lab/core/rigid_body_jit.py`.
 **GPU:** `classify_cube_dev(qw, qx, qy, qz)` in `drop_gpu.py`.
 
 ### Summary of classification codes
@@ -302,7 +302,7 @@ display), the vertical axis is $h$.  Pixel colour encodes the discrete
 outcome: blue for heads, red for tails, grey for edge (coin); paired
 hues for the six faces (cube).
 
-The function `_results_to_rgb(results, colors)` in `drop_experiment.py`
+The function `_results_to_rgb(results, colors)` in `base.py`
 converts the integer outcome grid to an $(n_h, n_a, 3)$ floating-point
 RGB array, displayed with `imshow(origin="lower")` so that height
 increases upward.
@@ -352,12 +352,12 @@ on whether PyVista is installed.
 
 ### Live dashboard (PyVista + matplotlib)
 
-**Entry:** `run_live_dashboard()` in `live_dashboard.py`, dispatching
+**Entry:** `run_live_dashboard()` in `lab/visualization/dashboard.py`, dispatching
 to `_run_pyvista_live()`.
 
 Two windows run simultaneously:
 
-1. **PyVista window** (`lab/visualization/pyvista_scene.py::DropScene`)
+1. **PyVista window** (`lab/visualization/body_scene.py::BodyScene`)
    - All $N$ bodies rendered as VTK actors on an OpenGL floor plane.
    - Each body shares a template mesh (`pv.Cylinder` for coin,
      `pv.Box` for cube) but has its own `user_matrix` --- a $4\times4$
@@ -383,7 +383,7 @@ Two windows run simultaneously:
    - Right panel: histogram, bar heights update in real time.
    - Bottom strip: pause/resume button + speed slider.
    - `FuncAnimation` drives the loop at ~30 fps (`interval=30` ms).
-     Each frame calls `_step_all()` with an adaptive step count and
+     Each frame calls `step_bodies()` with an adaptive step count and
      then refreshes both the 3D scene and the 2D panels.
 
 **Fallback (no PyVista):** `run_live_dashboard()` falls back to a
@@ -393,19 +393,19 @@ scatter plot (3D), outcome map, histogram --- plus a control strip.
 Functional but significantly slower for $N > 100$ because matplotlib
 performs depth sorting on the CPU for every polygon every frame.
 
-### Batch result viewer (`animate_drop_results`)
+### Batch result viewer (`run_replay`)
 
-**Module:** `lab/experiments/drop_experiment.py::animate_drop_results`
+**Module:** `lab/visualization/dashboard.py::run_replay`
 
 Pre-computed results displayed with time-synchronised playback
-controls.  `animate_drop_results()` dispatches to `_animate_pyvista()`
+controls.  `run_replay()` dispatches to `_animate_pyvista()`
 or `_animate_mpl_fallback()` based on PyVista availability.
 
 **Outcome map and histogram:** shown immediately with all results
 (the sweep has already completed).
 
 **3D physics animation:** re-simulates the entire grid forward using
-`_step_all()` from `live_dashboard.py`.  This provides frame-accurate
+the batch stepper in `lab/core/rigid_body_jit.py`.  This provides frame-accurate
 physics replay without storing the full trajectory of every body.
 
 **Time controls:**
@@ -420,7 +420,7 @@ physics replay without storing the full trajectory of every body.
 
 **PyVista path** (`_animate_pyvista`):
 
-- `DropScene` manages the 3D window with the same `user_matrix`
+- `BodyScene` manages the 3D window with the same `user_matrix`
   mechanism as the live dashboard.
 - Settled bodies are coloured by their pre-computed outcome.
 - The matplotlib figure contains the outcome map, histogram, slider,
@@ -440,12 +440,12 @@ physics replay without storing the full trajectory of every body.
 ```mermaid
 flowchart LR
     subgraph Physics
-        SA["_step_all\n(@njit)"]
-        CL["_classify_jit\n(@njit)"]
+        SA["step_bodies\n(@njit)"]
+        CL["classify\n(@njit)"]
     end
 
     subgraph "3D Rendering"
-        PV["DropScene\n(PyVista / VTK / OpenGL)"]
+        PV["BodyScene\n(PyVista / VTK / OpenGL)"]
         MPL3D["Poly3DCollection\n(matplotlib fallback)"]
     end
 
@@ -490,7 +490,7 @@ contact model parameters (restitution, friction, rolling resistance).
 | Vertical (height) | $y$ | $z$ |
 | Horizontal 2 | $z$ | $y$ |
 
-The swap is handled by `build_user_matrix()` in `pyvista_scene.py`,
+The swap is handled by `build_user_matrix()` in `body_scene.py`,
 which conjugates the physics rotation matrix by $S$:
 
 $$
@@ -532,30 +532,31 @@ derivation and [gpu.md](gpu.md) for the CUDA implementation details.
 **Minimal coin sweep (CPU):**
 
 ```bash
-python experiments/drop_coin.py --nh 8 --na 12
+python main.py coin --nh 8 --na 12
 ```
 
 **High-resolution cube sweep (GPU):**
 
 ```bash
-python experiments/drop_cube.py --gpu --nh 200 --na 300
+python main.py cube --gpu --nh 200 --na 300
 ```
 
 **Live dashboard for presentations:**
 
 ```bash
-python experiments/drop_coin.py --live --nh 8 --na 12
+python main.py coin --live --nh 8 --na 12
 ```
 
 **Programmatic usage:**
 
 ```python
 import numpy as np
-from lab.experiments.drop_experiment import sweep_drop, plot_drop_map
+from lab.experiments.coin import CoinDrop
 
+exp = CoinDrop()
 heights = np.linspace(0.5, 5.0, 20)
 angles  = np.linspace(-np.pi/4, np.pi/4, 30)
 
-results = sweep_drop("coin", heights, angles, tilt_axis="x")
-fig, ax, img = plot_drop_map(heights, angles, results, "coin")
+results = exp.sweep(heights, angles, tilt_axis="x")
+exp.show_results(heights, angles, results, tilt_axis="x")
 ```

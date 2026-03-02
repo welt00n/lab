@@ -6,6 +6,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.7.0] — 2026-03-02
+
+### Added
+- **Experiment framework.** New `DropExperiment` base class
+  (`lab/experiments/base.py`) with declarative subclasses `CoinDrop`
+  (`lab/experiments/coin.py`) and `CubeDrop` (`lab/experiments/cube.py`).
+  Experiments define only shape-specific config (colors, labels, mesh,
+  angle range, settle height); all physics and visualization are inherited.
+- **Single physics core** (`lab/core/rigid_body_jit.py`). All `@njit`
+  physics — quaternion math, lowest-point calculation, floor constraint,
+  batch stepper (`step_bodies`), classification — consolidated into one
+  494-line module. Constants defined once; CPU batch, live, and GPU paths
+  all import from here.
+- **Generic visualization primitives**:
+  - `lab/visualization/sweep_grid.py` — categorical 2D color grid with
+    live `update()`. Replaces 3 prior implementations.
+  - `lab/visualization/category_histogram.py` — discrete bar chart with
+    live `update()`. Replaces 2 prior implementations.
+  - `lab/visualization/body_scene.py` — 3D rigid-body renderer (PyVista
+    or matplotlib fallback) with `update()`/`mark_settled()`.
+  - `lab/visualization/playback_controls.py` — reusable pause/speed/step
+    widgets. Replaces 4 prior copies.
+  - `lab/visualization/dashboard.py` — compositor wiring primitives to
+    experiment config for `show_results`, `run_live`, `run_replay`, and
+    `save_video` modes.
+- **Video export.** `--save-video` CLI flag renders an animated MP4 replay
+  (3D scene + outcome map + histogram) via `FuncAnimation.save()`. Falls
+  back to GIF via Pillow if FFmpeg is unavailable. Uses bundled FFmpeg
+  from `imageio-ffmpeg` when system FFmpeg is not installed.
+- **Full 360° coin sweep.** Coin angle range changed from 0–π to 0–2π.
+- **Auto-save results.** Every run saves outcome map PNG, histogram PNG,
+  and `parameters.json` to a dated folder under `results/`.
+- **Makefile** with targets: `install`, `coin`, `cube`, `demo-coin`,
+  `demo-cube`, `test`, `test-fast`, `clean`, `help`. Exports CUDA
+  environment variables for GPU runs.
+- **CUDA auto-discovery.** `_setup_nvidia_libs()` in `main.py`
+  configures `CUDA_HOME` and `LD_LIBRARY_PATH` from pip-installed NVIDIA
+  packages, enabling Numba CUDA without a system-wide CUDA toolkit.
+- **Comprehensive test suite** — 103 new test methods across 4 files:
+  - `tests/test_rigid_body_jit.py` (47 tests) — quaternion math,
+    lowest-point, classify, get_mass/get_inertia, step_bodies, warmup.
+  - `tests/test_experiments.py` (24 tests) — subclass config, build_grid,
+    sweep output, default_args.
+  - `tests/test_visualization.py` (11 tests) — sweep_grid and
+    category_histogram data transforms and artist creation.
+  - `tests/test_cli.py` (19 tests) — experiment loading, output dir
+    creation, argument parsing, NVIDIA setup safety.
+
+### Changed
+- **`main.py` rewritten** as a thin experiment launcher (~120 lines).
+  Discovers experiments from a registry, parses shared CLI args
+  (`--nh`, `--na`, `--hmin`, `--hmax`, `--axis`, `--gpu`, `--live`,
+  `--save-video`), dispatches to the appropriate experiment method.
+  All 9 inline demo functions removed.
+- **`lab/experiments/drop_gpu.py`** now imports constants from the JIT
+  core instead of duplicating them. Fixed namespace package path
+  resolution (`__path__` instead of `__file__`).
+- **`experiments/drop_coin.py`** and **`experiments/drop_cube.py`**
+  converted to thin redirect scripts that invoke `main.py`.
+- **`completions.bash`** rewritten for the new `main.py` CLI.
+- **`requirements.txt`** updated with `imageio-ffmpeg>=0.5` and
+  `nvidia-cuda-runtime-cu12`, `nvidia-cuda-nvcc-cu12`,
+  `nvidia-cuda-nvrtc-cu12` for pip-based CUDA support.
+- **Documentation** — all `docs/*.md` files updated to reflect the new
+  architecture: file paths, function names, CLI examples, and code
+  snippets corrected throughout.
+
+### Removed
+- `lab/experiments/live_dashboard.py` (1054 lines) — physics extracted
+  to JIT core, UI replaced by `dashboard.py` + visualization primitives.
+- `lab/experiments/drop_experiment.py` (830 lines) — absorbed into
+  `base.py` and visualization primitives.
+- `lab/visualization/pyvista_scene.py` (264 lines) — absorbed into
+  `body_scene.py`.
+- `lab/lab/__init__.py` — empty nested package directory.
+
+---
+
 ## [0.6.0] — 2026-02-23
 
 ### Added

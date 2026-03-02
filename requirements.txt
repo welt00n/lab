@@ -1,5 +1,12 @@
-numpy
-matplotlib
-pyvista
-pytest
-numba
+numpy>=2.0
+matplotlib>=3.9
+numba>=0.60
+pillow>=10.0
+imageio-ffmpeg>=0.5
+pytest>=8.0
+pyvista>=0.43
+
+# CUDA toolkit (pip-packaged, no system install needed)
+nvidia-cuda-runtime-cu12
+nvidia-cuda-nvcc-cu12
+nvidia-cuda-nvrtc-cu12

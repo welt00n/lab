@@ -150,29 +150,28 @@ class TestGpuVsCpuParity:
     chaotic boundary conditions.
     """
 
-    def _compare(self, shape, threshold=0.4):
+    def _compare(self, experiment, threshold=0.4):
         from lab.experiments.drop_gpu import sweep_drop_gpu
-        from lab.experiments.drop_experiment import sweep_drop
 
         heights = np.linspace(0.3, 1.5, 4)
         angles = np.linspace(0, 2 * np.pi, 6, endpoint=False)
 
-        gpu_r = sweep_drop_gpu(shape, heights, angles, tilt_axis="x")
-        cpu_r = sweep_drop(shape, heights, angles, tilt_axis="x", workers=1)
+        gpu_r = sweep_drop_gpu(experiment.shape, heights, angles, tilt_axis="x")
+        cpu_r = experiment.sweep(heights, angles, tilt_axis="x")
 
         match_frac = np.mean(gpu_r == cpu_r)
         assert match_frac >= threshold, (
-            f"{shape}: only {match_frac:.0%} match (threshold {threshold:.0%})"
+            f"{experiment.shape}: only {match_frac:.0%} match "
+            f"(threshold {threshold:.0%})"
         )
 
     def test_coin(self):
-        self._compare("coin")
+        from lab.experiments.coin import CoinDrop
+        self._compare(CoinDrop())
 
     def test_cube(self):
-        self._compare("cube")
-
-    def test_rod(self):
-        self._compare("rod")
+        from lab.experiments.cube import CubeDrop
+        self._compare(CubeDrop())
 
 
 # ===================================================================

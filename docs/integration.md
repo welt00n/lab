@@ -538,7 +538,7 @@ half-kick 1 → drift → quaternion drift → constraint → SETTLE CHECK → h
 At this point, if the constraint zeroed all momenta, $KE = 0$ exactly, and
 the settle condition triggers reliably.
 
-This is implemented in `lab/experiments/live_dashboard.py::_step_all`:
+This is implemented in `lab/core/rigid_body_jit.py::step_bodies`:
 
 ```python
 # Floor constraint (may zero all momenta)

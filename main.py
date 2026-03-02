@@ -1,248 +1,219 @@
 """
-lab — a Hamiltonian physics lab.
+lab — experiment launcher.
+
+Usage:
+    python main.py coin                    # CPU batch sweep
+    python main.py coin --gpu              # GPU (CUDA) sweep
+    python main.py coin --live             # live dashboard
+    python main.py cube --nh 20 --na 30    # custom grid size
+    python main.py                         # show help
 """
 
 import sys
+import os
+import argparse
+import time
+
 import numpy as np
 
 
-def demo_oscillator():
-    from lab.systems.oscillators import harmonic
-    from lab.core.experiment import Experiment
-    from lab.visualization.animate2d import animate
-    import matplotlib.pyplot as plt
+def _setup_nvidia_libs():
+    """Configure env vars so numba finds pip-installed NVIDIA CUDA libs."""
+    import glob, sysconfig
+    sp = sysconfig.get_path("purelib")
+    nv = os.path.join(sp, "nvidia")
+    if not os.path.isdir(nv):
+        return
 
-    H = harmonic(m=1.0, k=4.0)
-    data = Experiment(H, q0=[2.0], p0=[0.0], dt=0.01, duration=20.0).run()
-    print(f"Harmonic oscillator — energy error: {data.max_energy_error():.2e}")
-    anim = animate(data)
-    plt.show()
+    cuda_nvcc = os.path.join(nv, "cuda_nvcc")
+    if os.path.isdir(cuda_nvcc) and not os.environ.get("CUDA_HOME"):
+        os.environ["CUDA_HOME"] = cuda_nvcc
 
-
-def demo_coupled():
-    from lab.systems.oscillators import coupled
-    from lab.core.experiment import Experiment
-    from lab.visualization.animate2d import animate
-    import matplotlib.pyplot as plt
-
-    H = coupled(m1=1, m2=1, k1=2, k2=2, kc=0.5)
-    data = Experiment(H, q0=[1.0, 0.0], p0=[0.0, 0.0],
-                      dt=0.01, duration=30.0).run()
-    print(f"Coupled oscillators — energy error: {data.max_energy_error():.2e}")
-    anim = animate(data)
-    plt.show()
+    lib_dirs = sorted(glob.glob(os.path.join(nv, "*", "lib*")))
+    if lib_dirs:
+        existing = os.environ.get("LD_LIBRARY_PATH", "")
+        new = ":".join(d for d in lib_dirs if d not in existing)
+        if new:
+            os.environ["LD_LIBRARY_PATH"] = (new + ":" + existing).rstrip(":")
 
 
-def demo_pendulum():
-    from lab.systems.pendulums import simple_pendulum
-    from lab.core.experiment import Experiment
-    from lab.visualization.animate2d import animate
-    import matplotlib.pyplot as plt
-
-    H = simple_pendulum(m=1, l=1, g=9.81)
-    data = Experiment(H, q0=[2.5], p0=[0.0], dt=0.005, duration=20.0).run()
-    print(f"Simple pendulum — energy error: {data.max_energy_error():.2e}")
-    anim = animate(data)
-    plt.show()
+_setup_nvidia_libs()
 
 
-def demo_double_pendulum():
-    from lab.systems.pendulums import double_pendulum
-    from lab.core.experiment import Experiment
-    from lab.visualization.animate2d import animate
-    import matplotlib.pyplot as plt
-
-    H = double_pendulum(m1=1, m2=1, l1=1, l2=1, g=9.81)
-    data = Experiment(H, q0=[2.0, 2.0], p0=[0.0, 0.0],
-                      dt=0.002, duration=20.0, integrator="rk4").run()
-    print(f"Double pendulum — energy error: {data.max_energy_error():.2e}")
-    anim = animate(data)
-    plt.show()
-
-
-def demo_kepler():
-    from lab.systems.central_force import kepler
-    from lab.core.experiment import Experiment
-    from lab.visualization.animate2d import animate
-    import matplotlib.pyplot as plt
-
-    H = kepler(m=1, M=100, G=1)
-    data = Experiment(H, q0=[5.0, 0.0], p0=[0.0, 18.0],
-                      dt=0.002, duration=80.0).run()
-    print(f"Kepler orbit — energy error: {data.max_energy_error():.2e}")
-    anim = animate(data)
-    plt.show()
-
-
-def demo_cyclotron():
-    from lab.systems.charged import uniform_B
-    from lab.core.experiment import Experiment
-    from lab.visualization.animate2d import animate
-    import matplotlib.pyplot as plt
-
-    H = uniform_B(m=1, charge=1, B=[0, 0, 1])
-    data = Experiment(H, q0=[0, 0, 0], p0=[1, 0, 0],
-                      dt=0.005, duration=30.0, integrator="rk4").run()
-    print(f"Cyclotron — energy error: {data.max_energy_error():.2e}")
-    anim = animate(data)
-    plt.show()
-
-
-def demo_drop(body_type="cube"):
-    from lab.systems.rigid_body import drop_cube, drop_coin
-    from lab.core import quaternion as quat
-    from lab.visualization.animate2d import animate
-    import matplotlib.pyplot as plt
-
-    builders = {"cube": drop_cube, "coin": drop_coin}
-    builder = builders.get(body_type, drop_cube)
-    orientation = quat.from_axis_angle([1, 1, 0], 0.4)
-
-    exp = builder(height=2.0, restitution=0.6, friction=0.5, dt=0.001,
-                  duration=4.0, orientation=orientation)
-    data = exp.run(progress=True)
-    print(f"{body_type} drop — final height: {data.q[-1, 1]:.3f} m")
-    anim = animate(data)
-    plt.show()
-
-
-def demo_emwave():
-    from lab.systems.emwave import FDTDGrid1D, gaussian_pulse
-    from lab.visualization.field_snapshot import animate_1d
-    import matplotlib.pyplot as plt
-
-    grid = FDTDGrid1D(nx=400, dx=0.01)
-    grid.add_source(gaussian_pulse(50, amplitude=1.0, width=20, delay=40))
-    grid.set_material(200, 300, epsilon=4.0)
-    grid.enable_pml(width=30)
-    print("Running 1D FDTD — Gaussian pulse hitting a dielectric slab...")
-    data = grid.run(nsteps=600, snapshot_interval=3)
-    print(f"FDTD — {data.nsteps} snapshots captured")
-    anim = animate_1d(data)
-    plt.show()
-
-
-def demo_rays():
-    from lab.systems.ray_optics import (
-        ray_hamiltonian, spherical_lens, launch_fan,
-    )
-    from lab.core.experiment import Experiment
-    from lab.visualization.field_snapshot import plot_ray_paths
-    import matplotlib.pyplot as plt
-
-    n = spherical_lens(center=[3.0, 0.0], radius=1.0, n_lens=1.8, n_outside=1.0)
-    H = ray_hamiltonian(n, ndim=2)
-
-    angles = np.linspace(-0.35, 0.35, 25)
-    ics = launch_fan(n, origin=[0.0, 0.0], angles=angles)
-
-    datasets = []
-    for q0, p0 in ics:
-        data = Experiment(H, q0=q0, p0=p0, dt=0.01, duration=6.0,
-                          integrator="rk4").run()
-        datasets.append(data)
-
-    print(f"Ray optics — {len(datasets)} rays through a spherical lens")
-    plot_ray_paths(datasets, n_func=n, xlim=(-0.5, 7), ylim=(-3, 3))
-    plt.title("Rays through a spherical lens")
-    plt.tight_layout()
-    plt.show()
-
-
-DEMOS = {
-    "oscillator": demo_oscillator,
-    "coupled": demo_coupled,
-    "pendulum": demo_pendulum,
-    "double": demo_double_pendulum,
-    "kepler": demo_kepler,
-    "cyclotron": demo_cyclotron,
-    "drop": demo_drop,
-    "emwave": demo_emwave,
-    "rays": demo_rays,
+EXPERIMENTS = {
+    "coin": "lab.experiments.coin.CoinDrop",
+    "cube": "lab.experiments.cube.CubeDrop",
 }
 
 
+def _load_experiment(name):
+    """Import and instantiate the named experiment class."""
+    dotted = EXPERIMENTS[name]
+    module_path, cls_name = dotted.rsplit(".", 1)
+    import importlib
+    mod = importlib.import_module(module_path)
+    return getattr(mod, cls_name)()
+
+
+def _make_output_dir(shape, mode):
+    """Create a dated output folder under results/."""
+    from pathlib import Path
+    from datetime import datetime
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    suffix = f"_{mode}" if mode else ""
+    path = Path("results") / f"{stamp}_{shape}{suffix}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _save_parameters(output_dir, args, elapsed):
+    """Write run parameters to JSON for reproducibility."""
+    import json
+    from pathlib import Path
+    params = {
+        "experiment": args.experiment,
+        "nh": args.nh,
+        "na": args.na,
+        "hmin": args.hmin,
+        "hmax": args.hmax,
+        "axis": args.axis,
+        "mode": "gpu" if args.gpu else ("live" if args.live else "batch"),
+        "save_video": args.save_video,
+        "elapsed_seconds": round(elapsed, 2),
+    }
+    (Path(output_dir) / "parameters.json").write_text(
+        json.dumps(params, indent=2) + "\n")
+
+
 def welcome():
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-    CYAN = "\033[36m"
-    YELLOW = "\033[33m"
-    GREEN = "\033[32m"
-    MAGENTA = "\033[35m"
-    RESET = "\033[0m"
+    BOLD, DIM, CYAN = "\033[1m", "\033[2m", "\033[36m"
+    YELLOW, GREEN, RESET = "\033[33m", "\033[32m", "\033[0m"
 
     print(f"""
-{BOLD}{CYAN}╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║   ⚛  lab — Hamiltonian Physics Lab                           ║
-║                                                              ║
-╚══════════════════════════════════════════════════════════════╝{RESET}
-
-  A framework for simulating classical systems through the
-  universal language of Hamiltonian mechanics: {BOLD}H(q, p){RESET}.
-
-{BOLD}{YELLOW}  Demos{RESET}  {DIM}(each opens an animated matplotlib window){RESET}
-{DIM}  ─────────────────────────────────────────────────────────{RESET}
-  {GREEN}python main.py oscillator{RESET}    Spring-mass animation + trace
-  {GREEN}python main.py coupled{RESET}       Two coupled oscillators
-  {GREEN}python main.py pendulum{RESET}      Swinging pendulum with trail
-  {GREEN}python main.py double{RESET}        Double pendulum — chaos
-  {GREEN}python main.py kepler{RESET}        Kepler orbit tracing
-  {GREEN}python main.py cyclotron{RESET}     Charged particle in B field
-  {GREEN}python main.py drop{RESET}          Rigid body drop  {DIM}[cube|coin]{RESET}
-  {GREEN}python main.py emwave{RESET}        EM pulse hitting a dielectric slab
-  {GREEN}python main.py rays{RESET}          Light rays through a spherical lens
-
-{BOLD}{YELLOW}  Using the library{RESET}
-{DIM}  ─────────────────────────────────────────────────────────{RESET}
-  {MAGENTA}from lab.core.hamiltonian import Hamiltonian
-  from lab.core.experiment  import Experiment{RESET}
-
-  Define H(q, p), pick initial conditions and an integrator,
-  and let the Experiment runner produce a DataSet you can
-  plot, animate, or analyse.
-
-{BOLD}{YELLOW}  Available systems{RESET}
-{DIM}  ─────────────────────────────────────────────────────────{RESET}
-  lab.systems.{GREEN}oscillators{RESET}     harmonic, coupled, duffing, ...
-  lab.systems.{GREEN}pendulums{RESET}       simple, double, spherical
-  lab.systems.{GREEN}central_force{RESET}   kepler, general central
-  lab.systems.{GREEN}charged{RESET}         uniform E, uniform B, crossed E×B
-  lab.systems.{GREEN}rigid_body{RESET}      3D rigid bodies with contact
-  lab.systems.{GREEN}emwave{RESET}          FDTD Maxwell solver (1D, 2D)
-  lab.systems.{GREEN}ray_optics{RESET}      Hamiltonian geometric optics
+{BOLD}{CYAN}\u256c\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2569
+\u2551                                                              \u2551
+\u2551   \u269b  lab \u2014 Hamiltonian Physics Lab                           \u2551
+\u2551                                                              \u2551
+\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u256c{RESET}
 
 {BOLD}{YELLOW}  Experiments{RESET}
-{DIM}  ─────────────────────────────────────────────────────────{RESET}
-  See {CYAN}experiments/{RESET} for Jupyter notebooks (e.g. coin toss).
+{DIM}  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{RESET}
+  {GREEN}python main.py coin{RESET}              Coin drop (CPU batch)
+  {GREEN}python main.py coin --live{RESET}       Coin drop (live dashboard)
+  {GREEN}python main.py coin --gpu{RESET}        Coin drop (GPU CUDA)
+  {GREEN}python main.py cube{RESET}              Cube drop (CPU batch)
+  {GREEN}python main.py cube --live{RESET}       Cube drop (live dashboard)
+  {GREEN}python main.py cube --gpu{RESET}        Cube drop (GPU CUDA)
+
+{BOLD}{YELLOW}  Options{RESET}
+{DIM}  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{RESET}
+  --nh N       Height grid points (default: 40)
+  --na N       Angle grid points (default: 60)
+  --hmin F     Min height in metres (default: 0.1)
+  --hmax F     Max height in metres (default: 5.0)
+  --axis X     Tilt axis: x, y, or z (default: x)
+  --live       Live 3D dashboard
+  --gpu        Use CUDA GPU for sweep
+  --save-video Save animated replay as MP4
 
 {BOLD}{YELLOW}  Tests{RESET}
-{DIM}  ─────────────────────────────────────────────────────────{RESET}
+{DIM}  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{RESET}
   {GREEN}python -m pytest tests/ -v{RESET}
-
-{BOLD}{YELLOW}  Docs{RESET}
-{DIM}  ─────────────────────────────────────────────────────────{RESET}
-  See {CYAN}docs/{RESET} for architecture, physics, and integration guides.
 """)
 
 
 def main():
-    args = sys.argv[1:]
+    parser = argparse.ArgumentParser(
+        description="lab \u2014 Hamiltonian Physics Lab experiment launcher")
+    parser.add_argument("experiment", nargs="?", default=None,
+                        choices=list(EXPERIMENTS.keys()),
+                        help="experiment to run")
+    parser.add_argument("--nh", type=int, default=40,
+                        help="height grid points")
+    parser.add_argument("--na", type=int, default=60,
+                        help="angle grid points")
+    parser.add_argument("--hmin", type=float, default=0.1,
+                        help="min drop height (m)")
+    parser.add_argument("--hmax", type=float, default=5.0,
+                        help="max drop height (m)")
+    parser.add_argument("--axis", default="x", choices=["x", "y", "z"],
+                        help="tilt axis")
+    parser.add_argument("--gpu", action="store_true",
+                        help="use GPU (CUDA) for parameter sweep")
+    parser.add_argument("--live", action="store_true",
+                        help="live 3D dashboard with animated physics")
+    parser.add_argument("--save-video", action="store_true",
+                        help="save animated replay as MP4 to results folder")
 
-    if not args:
+    args = parser.parse_args()
+
+    if args.experiment is None:
         welcome()
         return
 
-    name = args[0]
-    if name == "drop":
-        body_type = args[1] if len(args) > 1 else "cube"
-        demo_drop(body_type)
-    elif name in DEMOS:
-        DEMOS[name]()
+    exp = _load_experiment(args.experiment)
+    heights, angles = exp.build_grid(args.nh, args.na, args.hmin, args.hmax)
+    total = args.nh * args.na
+
+    if args.live:
+        mode = "live"
+        print(f"{exp.shape.title()} drop experiment (live dashboard)")
+        print(f"  grid:    {args.nh} x {args.na} = {total} simulations")
+        print(f"  heights: {args.hmin} \u2013 {args.hmax} m")
+        print(f"  tilt:    about {args.axis}-axis")
+        print()
+        exp.run_live(heights, angles, tilt_axis=args.axis)
+
+    elif args.gpu:
+        mode = "gpu"
+        from lab.experiments.drop_gpu import gpu_info
+        info = gpu_info()
+        if info is None:
+            print("ERROR: CUDA is not available.")
+            sys.exit(1)
+        print(f"{exp.shape.title()} drop experiment (GPU)")
+        print(f"  device:  {info['name']}")
+        print(f"  grid:    {args.nh} x {args.na} = {total} simulations")
+        print(f"  heights: {args.hmin} \u2013 {args.hmax} m")
+        print()
+        t0 = time.time()
+        results = exp.sweep_gpu(heights, angles, tilt_axis=args.axis)
+        elapsed = time.time() - t0
+        print(f"Done in {elapsed:.3f}s "
+              f"({total / max(elapsed, 1e-9):.0f} sims/sec)")
+
+        output_dir = _make_output_dir(exp.shape, mode)
+        _save_parameters(output_dir, args, elapsed)
+        exp.show_results(heights, angles, results,
+                         tilt_axis=args.axis, mode="GPU",
+                         output_dir=str(output_dir))
+        if args.save_video:
+            exp.save_video(heights, angles, results,
+                           tilt_axis=args.axis,
+                           output_dir=str(output_dir))
+
     else:
-        print(f"Unknown demo: {name!r}\n")
-        print(f"Available demos: {', '.join(DEMOS.keys())}")
-        print("Run without arguments for full help.")
+        mode = "batch"
+        print(f"{exp.shape.title()} drop experiment (CPU batch)")
+        print(f"  grid:    {args.nh} x {args.na} = {total} simulations")
+        print(f"  heights: {args.hmin} \u2013 {args.hmax} m")
+        print(f"  tilt:    about {args.axis}-axis")
+        print()
+        t0 = time.time()
+        results = exp.sweep(heights, angles, tilt_axis=args.axis)
+        elapsed = time.time() - t0
+        print(f"Done in {elapsed:.1f}s "
+              f"({total / max(elapsed, 1e-9):.0f} sims/sec)")
+
+        output_dir = _make_output_dir(exp.shape, mode)
+        _save_parameters(output_dir, args, elapsed)
+        exp.show_results(heights, angles, results,
+                         tilt_axis=args.axis, mode="CPU",
+                         output_dir=str(output_dir))
+        if args.save_video:
+            exp.save_video(heights, angles, results,
+                           tilt_axis=args.axis,
+                           output_dir=str(output_dir))
 
 
 if __name__ == "__main__":

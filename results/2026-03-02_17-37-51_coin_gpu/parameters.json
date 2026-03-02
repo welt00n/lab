@@ -1,0 +1,11 @@
+{
+  "experiment": "coin",
+  "nh": 42,
+  "na": 60,
+  "hmin": 0.1,
+  "hmax": 5.0,
+  "axis": "x",
+  "mode": "gpu",
+  "save_video": true,
+  "elapsed_seconds": 1.5
+}

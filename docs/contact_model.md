@@ -79,7 +79,7 @@ a vertex.
 
 ### Code references
 
-- **JIT**: `_lowest_coin()`, `_lowest_cube()` in `lab/experiments/live_dashboard.py`
+- **JIT**: `_lowest_coin()`, `_lowest_cube()` in `lab/core/rigid_body_jit.py`
 - **CUDA**: `lowest_point_coin()`, `lowest_point_cube()` in `lab/experiments/drop_gpu.py`
 - **OOP**: `RigidBody.lowest_point()` + `_body_frame_extremes()` in `lab/systems/rigid_body/objects.py`
 
@@ -411,14 +411,14 @@ tradeoff for maximum performance in each context.
 | Lowest point (coin)  | `_body_frame_extremes()` + `lowest_point()`   | `_lowest_coin()`                            | `lowest_point_coin()`                       |
 | Lowest point (cube)  | (same)                                        | `_lowest_cube()`                            | `lowest_point_cube()`                       |
 | Penetration + impulse| `FloorConstraint._enforce_rigid()`            | `_floor()`                                  | `floor_constraint()`                        |
-| Settle detection     | (not in OOP path)                             | `_step_all()` inner loop                    | `drop_kernel()` inner loop                  |
+| Settle detection     | (not in OOP path)                             | `step_bodies()` inner loop                  | `drop_kernel()` inner loop                  |
 | Entry point          | `FloorConstraint.enforce(body)`               | `_floor(shape, mass, ...)`                  | `floor_constraint(shape_id, mass, ...)`     |
 
 **Files**:
 
 - Python OOP: `lab/systems/rigid_body/constraints.py` (`FloorConstraint.enforce`)
   and `lab/systems/rigid_body/objects.py` (`RigidBody`)
-- JIT: `lab/experiments/live_dashboard.py` (`_floor`, `_lowest_*`, `_step_all`)
+- JIT: `lab/core/rigid_body_jit.py` (`_floor`, `_lowest_*`, `step_bodies`)
 - CUDA: `lab/experiments/drop_gpu.py` (`floor_constraint`, `lowest_point_*`, `drop_kernel`)
 
 ### Notable differences between codepaths

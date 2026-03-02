@@ -662,7 +662,7 @@ $dt = 0.0005$, 5000 steps correspond to 2.5 s of simulated time near the
 floor — physically, any residual motion at that point is below any
 measurable threshold.
 
-This is implemented in `live_dashboard.py::_step_all` as a secondary
+This is implemented in `lab/core/rigid_body_jit.py::step_bodies` as a secondary
 branch of the settle-detection logic.
 
 ---

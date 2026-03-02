@@ -33,7 +33,7 @@ the simulation.  All values SI.  Cross-references:
 The 8 g mass exceeds $\rho s^3 \approx 4.87\;\text{g}$ because casino
 dice use denser pip fills.  The value is a representative measured weight.
 
-In code (`live_dashboard.py`):
+In code (`lab/core/rigid_body_jit.py`):
 
 ```python
 COIN_RADIUS, COIN_HALF_THICK, COIN_MASS = 0.01213, 0.000875, 0.00567
@@ -79,7 +79,7 @@ $$
 $I_{\text{diam}} = 0.00567 \times 0.25 \times 0.01213^2 = 2.086 \times 10^{-7}\;\text{kg\,m}^2$,
 $I_{\text{axis}} = 4.172 \times 10^{-7}\;\text{kg\,m}^2$.
 
-**In code** (`_get_inertia`, `live_dashboard.py:341`):
+**In code** (`_get_inertia`, `lab/core/rigid_body_jit.py`):
 
 ```python
 m, r = COIN_MASS, COIN_RADIUS
@@ -102,7 +102,7 @@ $$
 
 **16 mm die:** $I_{\text{face}} = 0.008 \times 0.016^2 / 6 = 3.413 \times 10^{-7}\;\text{kg\,m}^2$.
 
-**In code** (`live_dashboard.py:345`):
+**In code** (`lab/core/rigid_body_jit.py`):
 
 ```python
 m, s = CUBE_MASS, 2.0 * CUBE_HALF_SIDE
@@ -163,7 +163,7 @@ $$
 where $L$ = `COIN_RADIUS` (coins) or `CUBE_HALF_SIDE` (cubes) --- the PE
 of lifting the object by its own characteristic size.
 
-In code (`live_dashboard.py:310`): `ke_scale = mass * 9.81 * char_size`.
+In code (`lab/core/rigid_body_jit.py`): `ke_scale = mass * 9.81 * char_size`.
 
 Quarter: $E_0 = 6.74 \times 10^{-4}\;\text{J}$.  Die: $E_0 = 6.28 \times 10^{-4}\;\text{J}$.
 
@@ -270,7 +270,7 @@ to the same visual size for uniform viewport appearance.
 
 ### The `user_matrix` transform
 
-PyVista `DropScene` (`pyvista_scene.py`) and the matplotlib
+PyVista `BodyScene` (`lab/visualization/body_scene.py`) and the matplotlib
 `Poly3DCollection` path both:
 
 1. Create the mesh once at visual scale (`pv.Cylinder` / `pv.Box`).

@@ -9,11 +9,11 @@ classical-mechanics course.*
 ## 1. Deterministic yet unpredictable
 
 There is a deep philosophical paradox hiding inside our coin-toss simulation.
-Open `lab/experiments/drop_experiment.py` and look at the function `drop_body`.
+Open `lab/core/rigid_body_jit.py` and look at the batch stepper.
 It takes a handful of numbers --- drop height, tilt axis, tilt angle, time step,
 restitution coefficient --- and feeds them through Newton's laws with absolutely
 no randomness.  There is no call to `random()`.  Every floating-point operation
-is prescribed.  Give the function the same inputs, and it will return the same
+is prescribed.  Give it the same inputs, and it will return the same
 output, bit for bit, every single time.
 
 The simulation is therefore **deterministic**: the future is uniquely fixed by
@@ -360,8 +360,9 @@ though the underlying mechanics is deterministic and time-reversible.
 Run the coin-toss experiment on the CPU:
 
 ```python
-from lab.experiments.drop_experiment import sweep_drop
-results_cpu = sweep_drop("coin", heights, angles, tilt_axis="x")
+from lab.experiments.coin import CoinDrop
+exp = CoinDrop()
+results_cpu = exp.sweep(heights, angles, tilt_axis="x")
 ```
 
 Then run the same sweep on the GPU:
@@ -381,7 +382,7 @@ significant fraction of grid points.
 
 ### Why the disagreement is not a bug
 
-The CPU code in `drop_body` (inside `lab/experiments/drop_experiment.py`)
+The CPU code in the batch stepper (in `lab/core/rigid_body_jit.py`)
 executes floating-point operations sequentially via NumPy.  The GPU kernel
 in `lab/experiments/drop_gpu.py` runs the same mathematics on a CUDA core, but
 with different instruction scheduling.  IEEE 754 floating-point arithmetic is
@@ -510,7 +511,7 @@ predictability.
 Run the live dashboard for the coin with a fine grid:
 
 ```bash
-python experiments/drop_coin.py --live --nh 20 --na 30
+python main.py coin --live --nh 20 --na 30
 ```
 
 Watch the 3D panel.  You will notice:

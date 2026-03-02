@@ -450,7 +450,7 @@ Numba provides two compilation targets from the same ecosystem:
 | Decorator | Target | Where it runs | Use case |
 |---|---|---|---|
 | `@cuda.jit(device=True)` | PTX (GPU machine code) | GPU thread | Batch sweeps (`drop_gpu.py`) |
-| `@njit(cache=True)` | Native x86-64 | CPU | Live dashboard (`live_dashboard.py`) |
+| `@njit(cache=True)` | Native x86-64 | CPU | Live dashboard (`lab/visualization/dashboard.py`) |
 
 Both decorators compile Python functions to machine code at import time.
 Both require the same restrictions: no Python objects, no dynamic allocation,
@@ -487,7 +487,7 @@ recompiles automatically.
 
 ### Code reuse across targets
 
-The physics functions in `live_dashboard.py` and `drop_gpu.py` look
+The physics functions in `lab/core/rigid_body_jit.py` and `drop_gpu.py` look
 nearly identical because they *are* the same math.  The only differences
 are the decorator line and the loop structure:
 
@@ -626,7 +626,7 @@ export LD_LIBRARY_PATH="$CUDA_HOME/nvvm/lib64:$LD_LIBRARY_PATH"
 ### Running the GPU experiment
 
 ```bash
-python experiments/drop_coin.py --gpu --nh 200 --na 360
+python main.py coin --gpu --nh 200 --na 360
 ```
 
 This launches `sweep_drop_gpu()` with a 200 x 360 grid. On an RTX 3080,
